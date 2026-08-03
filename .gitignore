@@ -1,0 +1,56 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Distribución / empaquetado
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+
+# Credenciales y secretos — NUNCA versionar
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+.rotated-secrets.txt
+kubeconfig
+*.kubeconfig
+
+# Salidas de la herramienta — no versionar informes de clientes
+*.html
+*.pdf
+*.json
+*.sarif
+*.csv
+*.xml
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Pytest / cobertura
+.pytest_cache/
+.coverage
+htmlcov/

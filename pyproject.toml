@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "vamp-k8s-audit"
+version = "1.0"
+description = "Kubernetes cluster security auditor for authorized assessments"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "VampSecure Studios", email = "contact@vampsecurestudios.com" }]
+keywords = ["security", "pentest", "audit", "cybersecurity", "vampsecure", "kubernetes", "k8s", "container", "cloud-native"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = []
+
+
+[project.scripts]
+vamp-k8s-audit = "vamp_k8s_audit:main"
+
+[project.urls]
+Homepage = "https://github.com/Vampsecure-Labs/vamp-k8s-audit"
+Repository = "https://github.com/Vampsecure-Labs/vamp-k8s-audit"
+
+[tool.setuptools]
+py-modules = ["vamp_k8s_audit", "vampsec_report"]

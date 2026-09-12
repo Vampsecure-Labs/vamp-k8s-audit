@@ -40,3 +40,4 @@ Thumbs.db
 # Ficheros estándar de Kubernetes
 kubeconfig
 *.kubeconfig
+CLAUDE.md

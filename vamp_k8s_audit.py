@@ -40,7 +40,7 @@ from vampsec_report import (
 # Metadatos
 # ---------------------------------------------------------------------------
 
-VERSION   = "1.0"
+VERSION   = "1.1"
 TOOL_NAME = "vamp-k8s-audit"
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ __   ___   __  __ ___  ___ ___ ___ _   _ ___ ___ _      _   ___ ___
  \ V / _ \| |\/| |  _/\__ \ _| (__| |_| |   / _|| |__ / _ \| _ \__ \
   \_/_/ \_\_|  |_|_|  |___/___\___|\___/|_|_\___|____/_/ \_\___/___/
   by Antonio Hernandez "Belky" — VampSecure Studios
-  vamp-k8s-audit v1.0 · Kubernetes Security Auditor
+  vamp-k8s-audit v1.1 · Kubernetes Security Auditor
   ────────────────────────────────────────────────────────────────────────
   USO EXCLUSIVO EN AUDITORÍAS AUTORIZADAS · El uso no autorizado es ilegal
 """
@@ -1704,11 +1704,265 @@ class K8SAuditor:
         else:
             _log_warn("No se pudieron verificar las etiquetas de PSA en namespaces")
 
+    # ── Fase 7: OPA/Gatekeeper (v1.1) ─────────────────────────────────────
+
+    def fase7_opa(self) -> None:
+        """
+        Fase 7 — Auditoría de OPA/Gatekeeper (K8S-OPA-NNN).
+
+        Detecta si OPA/Gatekeeper está instalado comprobando la presencia de
+        sus CRDs, verifica si hay constraints definidas y reporta constraints
+        con violations activas como hallazgos de severidad HIGH.
+
+        Hallazgos:
+          K8S-OPA-001 — OPA no instalado → INFO (recomendación)
+          K8S-OPA-002 — OPA instalado sin constraints → MEDIUM
+          K8S-OPA-003 — Constraint con violations > 0 → HIGH por constraint
+        """
+        _log_phase(7, "OPA/Gatekeeper")
+
+        # Comprobar si OPA/Gatekeeper está instalado buscando sus CRDs
+        crds_raw = _kubectl_raw(["get", "crd", "--no-headers"])
+        gatekeeper_crds = [
+            l for l in crds_raw.splitlines()
+            if "gatekeeper.sh" in l.lower() or "constraints.gatekeeper" in l.lower()
+        ]
+
+        if not gatekeeper_crds:
+            self._add(Finding(
+                id          = "K8S-OPA-001",
+                title       = "OPA/Gatekeeper no está instalado en el clúster",
+                severity    = "INFO",
+                description = (
+                    "No se detectaron CRDs de OPA/Gatekeeper en el clúster. "
+                    "OPA Gatekeeper implementa admission control basado en políticas, "
+                    "impidiendo el despliegue de recursos que violen las normas de "
+                    "seguridad definidas por el equipo."
+                ),
+                evidence    = "kubectl get crd | grep gatekeeper — sin resultados",
+                affected    = "Clúster completo",
+                remediation = (
+                    "Considerar la instalación de OPA/Gatekeeper:\n"
+                    "  kubectl apply -f https://raw.githubusercontent.com/open-policy-agent/"
+                    "gatekeeper/v3.14.0/deploy/gatekeeper.yaml\n"
+                    "Ref: https://open-policy-agent.github.io/gatekeeper/"
+                ),
+                tags        = ["opa", "gatekeeper", "admission-control", "policy"],
+            ))
+            _log_clean("OPA/Gatekeeper no instalado (recomendación INFO emitida)")
+            return
+
+        _log_info(f"OPA/Gatekeeper detectado ({len(gatekeeper_crds)} CRDs encontrados)")
+
+        # Comprobar si hay constraints definidas
+        constraints_data = _kubectl(["get", "constraints", "--all-namespaces", "-o", "json"])
+        if not constraints_data or not constraints_data.get("items"):
+            self._add(Finding(
+                id          = "K8S-OPA-002",
+                title       = "OPA/Gatekeeper instalado pero sin constraints definidas",
+                severity    = "MEDIUM",
+                description = (
+                    "OPA/Gatekeeper está instalado pero no hay constraints definidas. "
+                    "Sin constraints activas, el admission controller no aplica ninguna "
+                    "política de seguridad — la instalación es ineficaz."
+                ),
+                evidence    = "kubectl get constraints --all-namespaces — sin resultados",
+                affected    = "OPA/Gatekeeper",
+                remediation = (
+                    "Definir constraints de seguridad adecuadas:\n"
+                    "  - Prohibir contenedores privilegiados (K8sPSPPrivilegedContainer)\n"
+                    "  - Requerir usuarios no root (K8sPSPAllowedUsers)\n"
+                    "  - Restringir imágenes a registros autorizados\n"
+                    "Ref: https://open-policy-agent.github.io/gatekeeper/website/"
+                    "docs/constrainttemplates"
+                ),
+                tags        = ["opa", "gatekeeper", "constraints", "policy"],
+            ))
+            return
+
+        items = constraints_data.get("items", [])
+        _log_info(f"Constraints encontradas: {len(items)}")
+
+        # Analizar violations activas en cada constraint
+        for constraint in items:
+            nombre       = constraint.get("metadata", {}).get("name", "desconocida")
+            kind         = constraint.get("kind", "Constraint")
+            violations   = constraint.get("status", {}).get("violations", [])
+            n_violations = len(violations)
+
+            if n_violations > 0:
+                partes_evidencia = [f"Constraint: {kind}/{nombre}"]
+                for v in violations[:5]:
+                    partes_evidencia.append(
+                        f"  - {v.get('kind', '?')}/{v.get('name', '?')} "
+                        f"en {v.get('namespace', 'cluster')}: "
+                        f"{v.get('message', '')[:120]}"
+                    )
+                if n_violations > 5:
+                    partes_evidencia.append(f"  ... y {n_violations - 5} violation(s) adicional(es)")
+
+                self._add(Finding(
+                    id          = "K8S-OPA-003",
+                    title       = f"Violations activas en constraint OPA: {kind}/{nombre}",
+                    severity    = "HIGH",
+                    description = (
+                        f"La constraint OPA/Gatekeeper '{kind}/{nombre}' tiene "
+                        f"{n_violations} violation(s) activa(s). Existen recursos en el "
+                        "clúster que violan las políticas de seguridad definidas."
+                    ),
+                    evidence    = "\n".join(partes_evidencia),
+                    affected    = f"OPA Constraint: {kind}/{nombre}",
+                    remediation = (
+                        f"Corregir los recursos que violan la constraint '{nombre}':\n"
+                        "  kubectl get constraints -o jsonpath='{.items[*].status.violations}'\n"
+                        "Durante la remediación se puede usar modo 'warn' para no bloquear:\n"
+                        "  spec.enforcementAction: warn"
+                    ),
+                    tags        = ["opa", "gatekeeper", "constraints", "violations", "policy"],
+                ))
+            else:
+                _log_clean(f"Constraint {kind}/{nombre}: sin violations")
+
+    # ── Fase 8: Admission Webhooks (v1.1) ─────────────────────────────────
+
+    def fase8_webhooks(self) -> None:
+        """
+        Fase 8 — Auditoría de Admission Webhooks (K8S-WHK-NNN).
+
+        Audita ValidatingWebhookConfigurations y MutatingWebhookConfigurations
+        en busca de configuraciones inseguras que puedan eludir controles.
+
+        Hallazgos:
+          K8S-WHK-001 — failurePolicy: Ignore → MEDIUM (bypass en fallo)
+          K8S-WHK-002 — namespaceSelector vacío → HIGH (aplica a kube-system)
+          K8S-WHK-003 — timeoutSeconds > 10 → LOW (latencia del API server)
+        """
+        _log_phase(8, "Admission Webhooks")
+
+        for wh_tipo, wh_recurso in [
+            ("Validating", "validatingwebhookconfigurations"),
+            ("Mutating",   "mutatingwebhookconfigurations"),
+        ]:
+            data = _kubectl(["get", wh_recurso, "-o", "json"])
+            if not data:
+                _log_clean(
+                    f"No se encontraron {wh_tipo}WebhookConfigurations "
+                    "(o sin acceso para listarlos)"
+                )
+                continue
+
+            configs = data.get("items", [])
+            _log_info(f"{wh_tipo}WebhookConfigurations: {len(configs)} encontrada(s)")
+
+            for config in configs:
+                cfg_name = config.get("metadata", {}).get("name", "?")
+                webhooks = config.get("webhooks", [])
+
+                for wh in webhooks:
+                    wh_name  = wh.get("name", "?")
+                    affected = (
+                        f"{wh_tipo}WebhookConfiguration/{cfg_name} → {wh_name}"
+                    )
+
+                    # 1. failurePolicy: Ignore — fallo del webhook permite la operación
+                    failure_policy = wh.get("failurePolicy", "Fail")
+                    if failure_policy == "Ignore":
+                        self._add(Finding(
+                            id          = "K8S-WHK-001",
+                            title       = (
+                                f"Webhook con failurePolicy=Ignore: {wh_name}"
+                            ),
+                            severity    = "MEDIUM",
+                            description = (
+                                f"El {wh_tipo.lower()} webhook '{wh_name}' en "
+                                f"'{cfg_name}' tiene failurePolicy=Ignore. Si el "
+                                "webhook falla o es inalcanzable, la operación se "
+                                "permite de todas formas, eludiendo los controles "
+                                "de seguridad que implementa."
+                            ),
+                            evidence    = f"{affected}\nfailurePolicy: Ignore",
+                            affected    = affected,
+                            remediation = (
+                                "Cambiar failurePolicy a 'Fail' para que un fallo del "
+                                "webhook bloquee la operación en lugar de permitirla:\n"
+                                "  failurePolicy: Fail\n"
+                                "Asegurarse de que el webhook tiene alta disponibilidad "
+                                "antes de activar este modo en producción."
+                            ),
+                            tags        = ["webhooks", "admission-control", "failure-policy"],
+                        ))
+
+                    # 2. namespaceSelector vacío — aplica a kube-system y a todos
+                    ns_selector = wh.get("namespaceSelector") or {}
+                    sin_selector = (
+                        not ns_selector
+                        or (
+                            not ns_selector.get("matchLabels")
+                            and not ns_selector.get("matchExpressions")
+                        )
+                    )
+                    if sin_selector:
+                        self._add(Finding(
+                            id          = "K8S-WHK-002",
+                            title       = (
+                                f"Webhook sin namespaceSelector (cubre kube-system): "
+                                f"{wh_name}"
+                            ),
+                            severity    = "HIGH",
+                            description = (
+                                f"El webhook '{wh_name}' no tiene namespaceSelector "
+                                "definido, lo que lo aplica a TODOS los namespaces "
+                                "incluyendo kube-system. Un fallo del webhook puede "
+                                "interrumpir componentes críticos del control plane."
+                            ),
+                            evidence    = f"{affected}\nnamespaceSelector: {{}}",
+                            affected    = affected,
+                            remediation = (
+                                "Añadir un namespaceSelector para excluir kube-system:\n"
+                                "  namespaceSelector:\n"
+                                "    matchExpressions:\n"
+                                "    - key: kubernetes.io/metadata.name\n"
+                                "      operator: NotIn\n"
+                                "      values: [kube-system, kube-public]"
+                            ),
+                            tags        = [
+                                "webhooks", "admission-control", "namespace-selector",
+                            ],
+                        ))
+
+                    # 3. timeoutSeconds > 10 — timeout elevado
+                    timeout_secs = wh.get("timeoutSeconds", 10)
+                    if isinstance(timeout_secs, int) and timeout_secs > 10:
+                        self._add(Finding(
+                            id          = "K8S-WHK-003",
+                            title       = (
+                                f"Webhook con timeout elevado "
+                                f"({timeout_secs}s): {wh_name}"
+                            ),
+                            severity    = "LOW",
+                            description = (
+                                f"El webhook '{wh_name}' tiene "
+                                f"timeoutSeconds={timeout_secs}. Un timeout elevado "
+                                "puede ralentizar el API server si el webhook es lento "
+                                "o inalcanzable, afectando la disponibilidad del clúster."
+                            ),
+                            evidence    = (
+                                f"{affected}\ntimeoutSeconds: {timeout_secs}"
+                            ),
+                            affected    = affected,
+                            remediation = (
+                                "Reducir timeoutSeconds a un máximo de 5-10 segundos:\n"
+                                "  timeoutSeconds: 5\n"
+                                "Optimizar el webhook para responder rápidamente."
+                            ),
+                            tags        = ["webhooks", "admission-control", "timeout"],
+                        ))
+
     # ── Ejecución completa ─────────────────────────────────────────────────
 
     def run(self) -> int:
         """
-        Ejecuta las 6 fases de auditoría y devuelve el exit code.
+        Ejecuta las 8 fases de auditoría y devuelve el exit code.
 
         Códigos de salida:
           0 — sin hallazgos CRITICAL o HIGH
@@ -1730,6 +1984,8 @@ class K8SAuditor:
         self.fase4_red()
         self.fase5_secretos()
         self.fase6_imagenes()
+        self.fase7_opa()
+        self.fase8_webhooks()
 
         return self._calcular_exit_code()
 

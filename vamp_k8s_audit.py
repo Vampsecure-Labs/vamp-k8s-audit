@@ -40,7 +40,7 @@ from vampsec_report import (
 # Metadatos
 # ---------------------------------------------------------------------------
 
-VERSION   = "1.1"
+VERSION   = "1.2"
 TOOL_NAME = "vamp-k8s-audit"
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ __   ___   __  __ ___  ___ ___ ___ _   _ ___ ___ _      _   ___ ___
  \ V / _ \| |\/| |  _/\__ \ _| (__| |_| |   / _|| |__ / _ \| _ \__ \
   \_/_/ \_\_|  |_|_|  |___/___\___|\___/|_|_\___|____/_/ \_\___/___/
   by Antonio Hernandez "Belky" — VampSecure Studios
-  vamp-k8s-audit v1.1 · Kubernetes Security Auditor
+  vamp-k8s-audit v1.2 · Kubernetes Security Auditor
   ────────────────────────────────────────────────────────────────────────
   USO EXCLUSIVO EN AUDITORÍAS AUTORIZADAS · El uso no autorizado es ilegal
 """
@@ -229,10 +229,12 @@ class K8SAuditor:
         context:   Optional[str],
         namespace: Optional[str],
         skip_images: bool = False,
+        skip_cve:   bool = False,
     ) -> None:
         self.context     = context
         self.namespace   = namespace
         self.skip_images = skip_images
+        self.skip_cve    = skip_cve
         self.findings:   List[Finding] = []
         self._server_url: str = ""
 
@@ -402,6 +404,9 @@ class K8SAuditor:
             if ns_sens in namespaces:
                 _log_info(f"Namespace sensible detectado: {ns_sens} (se verificará en fases posteriores)")
 
+        # ── Checks extendidos del API server (K8S-API-005, K8S-API-006)
+        self._check_api_server_extended(pods_count_total=pod_count_total)
+
     def _detectar_server_url(self) -> str:
         """Obtiene la URL del API server del contexto actual de kubectl."""
         texto = _kubectl_raw(["config", "view", "--minify", "-o",
@@ -428,6 +433,132 @@ class K8SAuditor:
                 return '"apiVersion"' in cuerpo or '"versions"' in cuerpo
         except Exception:
             return False
+
+    def _check_api_server_extended(self, pods_count_total: int = 0) -> None:
+        """
+        Checks adicionales del API server: autenticación anónima y automount tokens.
+
+        K8S-API-005 (HIGH): --anonymous-auth habilitado en versiones < 1.28
+        K8S-API-006 (MEDIUM): automount de service account tokens sin restricción
+        """
+
+        # ── K8S-API-005: Autenticación anónima
+        anon_config = _kubectl_raw(
+            ["get", "configmap", "kubeadm-config", "-n", "kube-system",
+             "-o", "yaml"]
+        )
+        anon_habilitado = False
+        if anon_config:
+            if "anonymous-auth: true" in anon_config.lower() or "anonymous-auth=true" in anon_config:
+                anon_habilitado = True
+        # También verificar versión del servidor para la condición < 1.28
+        version_data = _kubectl(["version", "--output", "json"])
+        version_str = ""
+        if version_data:
+            version_str = version_data.get("serverVersion", {}).get("gitVersion", "")
+        version_vulnerable = False
+        if version_str:
+            try:
+                # Extraer major.minor de cadenas tipo "v1.27.3"
+                partes_ver = re.findall(r"v(\d+)\.(\d+)", version_str)
+                if partes_ver:
+                    major_v, minor_v = int(partes_ver[0][0]), int(partes_ver[0][1])
+                    if major_v == 1 and minor_v < 28:
+                        version_vulnerable = True
+            except (ValueError, IndexError):
+                pass
+        # Si no hay config explícita de anonymous-auth=false Y versión vulnerable → HIGH
+        anon_false_explicito = (
+            "anonymous-auth: false" in anon_config.lower() if anon_config else False
+        )
+        if not anon_false_explicito and version_vulnerable:
+            self._add(Finding(
+                id          = "K8S-API-005",
+                title       = "Autenticación anónima posiblemente habilitada en API server",
+                severity    = "HIGH",
+                description = (
+                    f"El clúster ejecuta Kubernetes {version_str} (< 1.28) y no se detecta "
+                    "la opción --anonymous-auth=false de forma explícita en la configuración "
+                    "de kubeadm. En versiones anteriores a 1.28, el valor por defecto puede "
+                    "permitir acceso anónimo al API server, lo que expone información del clúster "
+                    "a actores no autenticados."
+                ),
+                evidence    = (
+                    f"Versión del servidor: {version_str}\n"
+                    f"anonymous-auth=false no detectado en kubeadm-config\n"
+                    "Fuente: kubectl get configmap kubeadm-config -n kube-system"
+                ),
+                affected    = "kube-apiserver",
+                remediation = (
+                    "Añadir --anonymous-auth=false al kube-apiserver. "
+                    "En clusters kubeadm, editar el ConfigMap kubeadm-config "
+                    "y actualizar los argumentos del API server:\n"
+                    "  extraArgs:\n"
+                    "    anonymous-auth: 'false'\n"
+                    "Verificar que no existan ClusterRoleBindings para system:anonymous."
+                ),
+                cvss        = 7.5,
+                tags        = ["api-server", "autenticación", "anónimo"],
+                references  = [
+                    "https://kubernetes.io/docs/reference/access-authn-authz/authentication/"
+                ],
+            ))
+        else:
+            _log_clean("Autenticación anónima del API server: sin riesgo detectado")
+
+        # ── K8S-API-006: Automount service account tokens sin restricción
+        pods_data_all = _kubectl(["get", "pods", "--all-namespaces", "-o", "json"])
+        if pods_data_all and pods_count_total > 0:
+            total_pods   = pods_count_total
+            items_pods   = pods_data_all.get("items", [])
+            con_automount = 0
+            for pod in items_pods:
+                spec_p = pod.get("spec", {}) or {}
+                automount_p = spec_p.get("automountServiceAccountToken")
+                # El default en Kubernetes es True cuando no se especifica
+                if automount_p is None or automount_p is True:
+                    con_automount += 1
+            if total_pods > 0:
+                porcentaje = (con_automount / total_pods) * 100
+                if porcentaje > 50:
+                    self._add(Finding(
+                        id          = "K8S-API-006",
+                        title       = "Más del 50% de pods con automount de service account token",
+                        severity    = "MEDIUM",
+                        description = (
+                            f"{con_automount} de {total_pods} pods ({porcentaje:.0f}%) tienen "
+                            "automountServiceAccountToken habilitado (valor por defecto o explícito). "
+                            "Los tokens montados automáticamente amplían la superficie de ataque: "
+                            "cualquier contenedor comprometido puede usar el token para acceder "
+                            "a la API de Kubernetes con los permisos de su ServiceAccount."
+                        ),
+                        evidence    = (
+                            f"Pods con automount token: {con_automount}/{total_pods} "
+                            f"({porcentaje:.0f}%)"
+                        ),
+                        affected    = f"{con_automount} pods en el clúster",
+                        remediation = (
+                            "Establecer automountServiceAccountToken: false en los pods que "
+                            "no necesiten acceder a la API de Kubernetes:\n"
+                            "  spec:\n"
+                            "    automountServiceAccountToken: false\n"
+                            "También se puede deshabilitar a nivel de ServiceAccount. "
+                            "Habilitar solo en los pods que realmente lo requieran."
+                        ),
+                        cvss        = 5.4,
+                        tags        = ["api-server", "serviceaccount", "tokens", "automount"],
+                        references  = [
+                            "https://kubernetes.io/docs/tasks/configure-pod-container/"
+                            "configure-service-account/#opt-out-of-api-credential-automounting"
+                        ],
+                    ))
+                else:
+                    _log_clean(
+                        f"Automount tokens: {porcentaje:.0f}% de pods — "
+                        "dentro del umbral aceptable"
+                    )
+        else:
+            _log_info("No se pudo verificar automount de tokens (datos insuficientes)")
 
     # ── Fase 2: Control de acceso RBAC ────────────────────────────────────
 
@@ -1958,6 +2089,293 @@ class K8SAuditor:
                             tags        = ["webhooks", "admission-control", "timeout"],
                         ))
 
+    # ── Fase 9: CVEs activos (v1.2) ───────────────────────────────────────
+
+    @staticmethod
+    def _parse_runc_version(version_str: str) -> Optional[Tuple[int, int, int, str]]:
+        """
+        Extrae la versión semver de una cadena de versión de runc.
+
+        Retorna una tupla (major, minor, patch, pre) o None si no se puede parsear.
+        Ejemplos de entrada: 'runc version 1.1.12', '1.2.3', '1.4.0-rc.3'
+        """
+        # Buscar patrón semver con opcional pre-release
+        patron = re.search(r"(\d+)\.(\d+)\.(\d+)(-[A-Za-z0-9._-]+)?", version_str)
+        if not patron:
+            return None
+        try:
+            major   = int(patron.group(1))
+            minor   = int(patron.group(2))
+            patch   = int(patron.group(3))
+            pre     = patron.group(4) or ""
+            return (major, minor, patch, pre)
+        except (ValueError, IndexError):
+            return None
+
+    def _check_cve_runc(self) -> None:
+        """
+        K8S-RUNC-001 (CRITICAL): CVE-2025-52881 — escape de contenedor runc vía race condition
+        en shared mounts. Afecta a runc < 1.2.8, < 1.3.3, < 1.4.0-rc.3.
+
+        K8S-RUNC-002 (HIGH): versión de runc no verificable.
+        """
+        _log_info("Verificando CVE-2025-52881 (runc container escape)...")
+
+        # Obtener versiones del runtime desde los nodos
+        runtime_versions_raw = _kubectl_raw(
+            ["get", "nodes", "-o",
+             "jsonpath={.items[*].status.nodeInfo.containerRuntimeVersion}"]
+        )
+
+        versiones_candidatas: List[str] = []
+        if runtime_versions_raw:
+            for token in runtime_versions_raw.split():
+                token = token.strip()
+                if token:
+                    versiones_candidatas.append(token)
+
+        # Intentar también runc/crictl locales como fuente secundaria
+        for cmd_local in [["runc", "--version"], ["crictl", "version"]]:
+            try:
+                resultado = subprocess.run(
+                    cmd_local, capture_output=True, text=True, timeout=5,
+                )
+                if resultado.returncode == 0 and resultado.stdout.strip():
+                    versiones_candidatas.append(resultado.stdout.strip())
+            except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
+                pass
+
+        if not versiones_candidatas:
+            # No se pudo determinar la versión
+            self._add(Finding(
+                id          = "K8S-RUNC-002",
+                title       = "Versión de runc no verificable (CVE-2025-52881)",
+                severity    = "HIGH",
+                description = (
+                    "No se pudo determinar la versión del runtime runc en los nodos del "
+                    "clúster. CVE-2025-52881 es una vulnerabilidad crítica de escape de "
+                    "contenedor por race condition en shared mounts. La incapacidad de "
+                    "verificar la versión impide confirmar si el clúster está parcheado."
+                ),
+                evidence    = (
+                    "kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo."
+                    "containerRuntimeVersion}' — sin resultados\n"
+                    "runc --version / crictl version — no disponibles localmente"
+                ),
+                affected    = "Nodos del clúster (versión runc indeterminada)",
+                remediation = (
+                    "Verificar manualmente la versión de runc en cada nodo:\n"
+                    "  kubectl debug node/<nombre> -it --image=busybox -- runc --version\n"
+                    "Actualizar runc a >= 1.2.8 (rama 1.x), >= 1.3.3 (rama 1.3.x) "
+                    "o >= 1.4.0 (rama 1.4.x)."
+                ),
+                cvss        = 7.8,
+                tags        = ["cve", "runc", "container-escape", "CVE-2025-52881"],
+                references  = [
+                    "https://github.com/opencontainers/runc/security/advisories/GHSA-XXXX"
+                ],
+            ))
+            return
+
+        # Analizar si alguna versión detectada es vulnerable
+        versiones_vulnerables: List[str] = []
+        for ver_raw in versiones_candidatas:
+            parsed = self._parse_runc_version(ver_raw)
+            if parsed is None:
+                continue
+            major, minor, patch, pre = parsed
+            # Solo analizar runc (el runtime puede ser containerd, cri-o, etc.)
+            # Si la cadena no menciona runc explícitamente, intentar igual si tiene semver
+            vulnerable = False
+            if major == 1:
+                if minor <= 1:
+                    # Rama 1.x (1.0.x, 1.1.x): vulnerable si < 1.2.8
+                    vulnerable = True
+                elif minor == 2 and patch < 8:
+                    vulnerable = True
+                elif minor == 3 and patch < 3:
+                    # Rama 1.3.x: vulnerable si < 1.3.3
+                    vulnerable = True
+                elif minor == 4:
+                    # Rama 1.4.x: vulnerable si < 1.4.0 (rc.3 considerado pre-release vulnerable)
+                    if patch == 0 and pre and "rc" in pre:
+                        # Extraer número de rc
+                        rc_match = re.search(r"rc\.?(\d+)", pre)
+                        if rc_match and int(rc_match.group(1)) < 3:
+                            vulnerable = True
+                        elif not rc_match:
+                            vulnerable = True  # rc sin número → asumir vulnerable
+                    elif patch == 0 and pre:
+                        vulnerable = True  # cualquier pre-release de 1.4.0 anterior
+            if vulnerable:
+                versiones_vulnerables.append(ver_raw)
+
+        if versiones_vulnerables:
+            self._add(Finding(
+                id          = "K8S-RUNC-001",
+                title       = "CVE-2025-52881: runc vulnerable a escape de contenedor (CRÍTICO)",
+                severity    = "CRITICAL",
+                description = (
+                    "Se detectaron versiones de runc vulnerables a CVE-2025-52881, una "
+                    "race condition en el manejo de shared mounts que permite a un proceso "
+                    "dentro de un contenedor escapar al namespace del host y obtener "
+                    "acceso root al nodo subyacente. Afecta a runc < 1.2.8 (rama 1.x), "
+                    "< 1.3.3 (rama 1.3.x) y < 1.4.0-rc.3 (rama 1.4.x pre-release)."
+                ),
+                evidence    = (
+                    "Versiones de runtime detectadas en los nodos:\n"
+                    + "\n".join(versiones_candidatas[:10]) + "\n"
+                    "Versiones identificadas como vulnerables:\n"
+                    + "\n".join(versiones_vulnerables[:10])
+                ),
+                affected    = f"Nodos del clúster ({len(versiones_vulnerables)} versiones vulnerables)",
+                remediation = (
+                    "Actualizar runc inmediatamente:\n"
+                    "  - Rama 1.x → runc >= 1.2.8\n"
+                    "  - Rama 1.3.x → runc >= 1.3.3\n"
+                    "  - Rama 1.4.x → runc >= 1.4.0 (release estable)\n"
+                    "En distribuciones gestionadas (EKS, GKE, AKS), actualizar el node pool "
+                    "a la última versión de la imagen base del nodo.\n"
+                    "Verificar la versión tras el parche:\n"
+                    "  kubectl debug node/<nombre> -it --image=busybox -- runc --version"
+                ),
+                cvss        = 9.8,
+                tags        = ["cve", "runc", "container-escape", "CVE-2025-52881", "crítico"],
+                references  = [
+                    "https://github.com/opencontainers/runc/security/advisories/GHSA-XXXX",
+                    "https://nvd.nist.gov/vuln/detail/CVE-2025-52881",
+                ],
+            ))
+        else:
+            _log_clean("CVE-2025-52881 (runc): versiones detectadas no son vulnerables")
+
+    def _check_cve_acm(self) -> None:
+        """
+        K8S-ACM-001 (CRITICAL): CVE-2026-66786 — escalada de privilegios sin autenticación
+        en Red Hat Advanced Cluster Management (ACM).
+
+        Verifica si ACM está instalado y si el endpoint de la API responde sin credenciales.
+        Si ACM no está presente, se omite el check silenciosamente.
+        """
+        _log_info("Verificando presencia de Red Hat ACM (CVE-2026-66786)...")
+
+        # Detectar ACM: buscar el hub de multicluster en open-cluster-management
+        acm_hub_raw = _kubectl_raw(
+            ["get", "pods", "-n", "open-cluster-management",
+             "--no-headers", "-o", "wide"]
+        )
+        tiene_acm = False
+        if acm_hub_raw and "multicluster" in acm_hub_raw.lower():
+            tiene_acm = True
+
+        # Segunda comprobación: ClusterManagementAddon (recurso CRD de ACM)
+        if not tiene_acm:
+            addon_raw = _kubectl_raw(
+                ["get", "ClusterManagementAddon", "--no-headers"]
+            )
+            if addon_raw and addon_raw.strip():
+                tiene_acm = True
+
+        if not tiene_acm:
+            if _VERBOSE:
+                _log_info("ACM no detectado en el clúster — omitiendo CVE-2026-66786")
+            return
+
+        _log_info("Red Hat ACM detectado — verificando acceso no autenticado (CVE-2026-66786)...")
+
+        # Intentar acceso sin credenciales al endpoint de ACM
+        acm_accesible_sin_auth = False
+        if self._server_url:
+            import urllib.request
+            import urllib.error
+            import ssl
+            try:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode    = ssl.CERT_NONE
+                url = f"{self._server_url}/multicloud/api/v1/"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                    if resp.status == 200:
+                        acm_accesible_sin_auth = True
+            except Exception:
+                pass
+
+        # Verificar también si el addon manager permite acceso anónimo
+        if not acm_accesible_sin_auth:
+            addon_list = _kubectl_raw(
+                ["get", "ClusterManagementAddon", "-o",
+                 "jsonpath={.items[*].metadata.name}"]
+            )
+            if addon_list and addon_list.strip():
+                # La presencia de addons sin verificación de auth es riesgo confirmado
+                # solo si el endpoint responde, de lo contrario registramos como potencial
+                if _VERBOSE:
+                    _log_info(
+                        f"ClusterManagementAddons encontrados: {addon_list.strip()[:100]}"
+                    )
+
+        if acm_accesible_sin_auth:
+            self._add(Finding(
+                id          = "K8S-ACM-001",
+                title       = "CVE-2026-66786: Red Hat ACM permite escalada de privs sin autenticación",
+                severity    = "CRITICAL",
+                description = (
+                    "El endpoint /multicloud/api/v1/ de Red Hat Advanced Cluster Management "
+                    "(ACM) responde con HTTP 200 sin credenciales de autenticación. "
+                    "CVE-2026-66786 describe una vulnerabilidad de escalada de privilegios "
+                    "sin autenticación que permite a un atacante tomar control del hub de "
+                    "gestión y, transitivamente, de todos los clústeres gestionados por ACM."
+                ),
+                evidence    = (
+                    f"GET {self._server_url}/multicloud/api/v1/ → HTTP 200 sin Authorization\n"
+                    "Red Hat ACM detectado en namespace open-cluster-management"
+                ),
+                affected    = f"Red Hat ACM en {self._server_url}",
+                remediation = (
+                    "Aplicar el parche de Red Hat para CVE-2026-66786 inmediatamente:\n"
+                    "  oc adm upgrade --to-latest (OpenShift) o actualizar el operador ACM.\n"
+                    "Como mitigación temporal:\n"
+                    "  - Restringir el acceso al endpoint /multicloud/ mediante NetworkPolicy\n"
+                    "  - Verificar los ClusterRoleBindings de system:anonymous en ACM\n"
+                    "  - Auditar los logs del hub ACM por accesos no autorizados recientes\n"
+                    "Referencia: https://access.redhat.com/security/cve/CVE-2026-66786"
+                ),
+                cvss        = 10.0,
+                tags        = ["cve", "acm", "red-hat", "escalada-privilegios",
+                               "sin-autenticación", "CVE-2026-66786"],
+                references  = [
+                    "https://access.redhat.com/security/cve/CVE-2026-66786",
+                    "https://nvd.nist.gov/vuln/detail/CVE-2026-66786",
+                ],
+            ))
+        else:
+            _log_clean(
+                "CVE-2026-66786 (ACM): endpoint no accesible sin autenticación "
+                "(o ACM no expone el endpoint de forma accesible)"
+            )
+
+    def fase9_cve(self) -> None:
+        """
+        Fase 9 — CVEs activos (K8S-RUNC-NNN, K8S-ACM-NNN).
+
+        Verifica CVEs críticos publicados recientemente que afectan al runtime
+        del clúster y a componentes opcionales de gestión multi-clúster.
+
+        Hallazgos:
+          K8S-RUNC-001 (CRITICAL) — CVE-2025-52881: runc container escape
+          K8S-RUNC-002 (HIGH)     — versión runc no verificable
+          K8S-ACM-001  (CRITICAL) — CVE-2026-66786: ACM priv esc sin auth
+        """
+        _log_phase(9, "CVEs activos")
+
+        if self.skip_cve:
+            _log_info("Verificación de CVEs omitida (--skip-cve)")
+            return
+
+        self._check_cve_runc()
+        self._check_cve_acm()
+
     # ── Ejecución completa ─────────────────────────────────────────────────
 
     def run(self) -> int:
@@ -1986,6 +2404,7 @@ class K8SAuditor:
         self.fase6_imagenes()
         self.fase7_opa()
         self.fase8_webhooks()
+        self.fase9_cve()
 
         return self._calcular_exit_code()
 
@@ -2086,6 +2505,10 @@ def _construir_parser() -> argparse.ArgumentParser:
         help="Omite el análisis de imágenes (fase 6) para ejecuciones más rápidas",
     )
     p.add_argument(
+        "--skip-cve", action="store_true", dest="skip_cve",
+        help="Omite la fase de CVEs activos (fase 9): runc CVE-2025-52881 y ACM CVE-2026-66786",
+    )
+    p.add_argument(
         "--verbose", "-v", action="store_true",
         help="Modo detallado: muestra evidencias adicionales en consola",
     )
@@ -2158,6 +2581,7 @@ def main() -> None:
         context     = args.context,
         namespace   = args.namespace,
         skip_images = args.skip_images,
+        skip_cve    = args.skip_cve,
     )
 
     exit_code = auditor.run()

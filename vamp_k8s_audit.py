@@ -40,7 +40,7 @@ from vampsec_report import (
 # Metadatos
 # ---------------------------------------------------------------------------
 
-VERSION   = "1.2"
+VERSION   = "1.3"
 TOOL_NAME = "vamp-k8s-audit"
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ __   ___   __  __ ___  ___ ___ ___ _   _ ___ ___ _      _   ___ ___
  \ V / _ \| |\/| |  _/\__ \ _| (__| |_| |   / _|| |__ / _ \| _ \__ \
   \_/_/ \_\_|  |_|_|  |___/___\___|\___/|_|_\___|____/_/ \_\___/___/
   by Antonio Hernandez "Belky" — VampSecure Studios
-  vamp-k8s-audit v1.2 · Kubernetes Security Auditor
+  vamp-k8s-audit v1.3 · Kubernetes Security Auditor
   ────────────────────────────────────────────────────────────────────────
   USO EXCLUSIVO EN AUDITORÍAS AUTORIZADAS · El uso no autorizado es ilegal
 """
@@ -226,15 +226,17 @@ class K8SAuditor:
 
     def __init__(
         self,
-        context:   Optional[str],
-        namespace: Optional[str],
+        context:     Optional[str],
+        namespace:   Optional[str],
         skip_images: bool = False,
-        skip_cve:   bool = False,
+        skip_cve:    bool = False,
+        audit_helm:  bool = False,
     ) -> None:
         self.context     = context
         self.namespace   = namespace
         self.skip_images = skip_images
         self.skip_cve    = skip_cve
+        self.audit_helm  = audit_helm
         self.findings:   List[Finding] = []
         self._server_url: str = ""
 
@@ -2376,6 +2378,179 @@ class K8SAuditor:
         self._check_cve_runc()
         self._check_cve_acm()
 
+    # ── Auditoría de Helm charts (v1.3) ───────────────────────────────────
+
+    def _audit_helm_charts(self, findings: List[Finding]) -> None:
+        """
+        Fase 10 — Helm charts desplegados (v1.3).
+
+        Ejecuta 'helm list -A -o json' para enumerar los releases activos y
+        comprueba malas configuraciones de seguridad comunes en sus valores.
+
+        Hallazgos:
+          K8S-HELM-001 (LOW)    — image.pullPolicy no es Always
+          K8S-HELM-002 (MEDIUM) — securityContext ausente
+          K8S-HELM-003 (LOW)    — resources.limits ausente
+          K8S-HELM-004 (MEDIUM) — Ingress habilitado sin TLS
+        """
+        _log_phase(10, "Helm charts")
+
+        # Verificar disponibilidad de helm
+        try:
+            res_ver = subprocess.run(
+                ["helm", "version", "--short"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if res_ver.returncode != 0:
+                _log_info("helm no disponible o devolvió error — checks Helm omitidos")
+                return
+        except FileNotFoundError:
+            _log_info("Helm no disponible o sin releases")
+            return
+        except subprocess.TimeoutExpired:
+            _log_info("helm no responde (timeout) — checks Helm omitidos")
+            return
+
+        # Listar releases de todos los namespaces
+        try:
+            res_list = subprocess.run(
+                ["helm", "list", "-A", "-o", "json"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if res_list.returncode != 0 or not res_list.stdout.strip():
+                _log_info("Helm no disponible o sin releases")
+                return
+            releases = json.loads(res_list.stdout)
+            if not releases:
+                _log_info("No se encontraron releases de Helm en el clúster")
+                return
+        except (json.JSONDecodeError, subprocess.TimeoutExpired):
+            _log_info("No se pudo parsear la salida de helm list")
+            return
+
+        _log_info(f"Encontrados {len(releases)} release(s) de Helm — auditando valores")
+
+        for release in releases:
+            nombre    = release.get("name", "?")
+            namespace = release.get("namespace", "default")
+            chart     = release.get("chart", "?")
+            prefijo   = f"{namespace}/{nombre}"
+
+            # Obtener valores del release
+            try:
+                res_vals = subprocess.run(
+                    ["helm", "get", "values", nombre, "-n", namespace, "-o", "json"],
+                    capture_output=True, text=True, timeout=20,
+                )
+                if res_vals.returncode != 0 or not res_vals.stdout.strip():
+                    continue
+                raw = res_vals.stdout.strip()
+                valores: dict = {} if raw == "null" else json.loads(raw)
+            except (json.JSONDecodeError, subprocess.TimeoutExpired):
+                continue
+
+            # K8S-HELM-001: image.pullPolicy debe ser Always
+            pull_policy = (valores.get("image") or {}).get("pullPolicy", "")
+            if pull_policy and pull_policy != "Always":
+                findings.append(Finding(
+                    id="K8S-HELM-001",
+                    severity="LOW",
+                    category="Helm",
+                    title=f"Helm release '{prefijo}': pullPolicy no es Always",
+                    description=(
+                        f"El release '{nombre}' (chart: {chart}) tiene "
+                        f"image.pullPolicy='{pull_policy}'. Con pullPolicy "
+                        "distinto de 'Always', el clúster puede arrancar "
+                        "imágenes cacheadas que no incluyan los últimos parches."
+                    ),
+                    evidence=(
+                        f"helm get values {nombre} -n {namespace}: "
+                        f"image.pullPolicy={pull_policy}"
+                    ),
+                    remediation=(
+                        "Establecer image.pullPolicy=Always en los valores:\n"
+                        f"  helm upgrade {nombre} <chart> -n {namespace} "
+                        "--set image.pullPolicy=Always"
+                    ),
+                ))
+
+            # K8S-HELM-002: securityContext ausente
+            if "securityContext" not in valores and "podSecurityContext" not in valores:
+                findings.append(Finding(
+                    id="K8S-HELM-002",
+                    severity="MEDIUM",
+                    category="Helm",
+                    title=f"Helm release '{prefijo}': securityContext no configurado",
+                    description=(
+                        f"El release '{nombre}' (chart: {chart}) no define "
+                        "securityContext ni podSecurityContext en sus valores. "
+                        "Sin este control, los pods pueden ejecutarse con "
+                        "privilegios innecesarios."
+                    ),
+                    evidence=(
+                        f"helm get values {nombre} -n {namespace}: "
+                        "securityContext ausente"
+                    ),
+                    remediation=(
+                        "Añadir securityContext con al menos:\n"
+                        "  runAsNonRoot: true\n"
+                        "  runAsUser: 1000\n"
+                        "  readOnlyRootFilesystem: true"
+                    ),
+                ))
+
+            # K8S-HELM-003: resources.limits ausente
+            resources = valores.get("resources") or {}
+            if not resources.get("limits"):
+                findings.append(Finding(
+                    id="K8S-HELM-003",
+                    severity="LOW",
+                    category="Helm",
+                    title=f"Helm release '{prefijo}': resources.limits no definido",
+                    description=(
+                        f"El release '{nombre}' (chart: {chart}) no define "
+                        "limits de CPU/memoria. Sin límites, un contenedor puede "
+                        "consumir todos los recursos del nodo (DoS interno)."
+                    ),
+                    evidence=(
+                        f"helm get values {nombre} -n {namespace}: "
+                        "resources.limits ausente"
+                    ),
+                    remediation=(
+                        "Definir limits en los valores del chart:\n"
+                        "  resources:\n"
+                        "    limits:\n"
+                        "      cpu: '500m'\n"
+                        "      memory: '512Mi'"
+                    ),
+                ))
+
+            # K8S-HELM-004: Ingress habilitado sin TLS
+            ingress = valores.get("ingress") or {}
+            if ingress.get("enabled") and not ingress.get("tls"):
+                findings.append(Finding(
+                    id="K8S-HELM-004",
+                    severity="MEDIUM",
+                    category="Helm",
+                    title=f"Helm release '{prefijo}': Ingress habilitado sin TLS",
+                    description=(
+                        f"El release '{nombre}' (chart: {chart}) tiene "
+                        "ingress.enabled=true pero ingress.tls está vacío o ausente. "
+                        "El tráfico HTTP sin cifrar expone datos y credenciales."
+                    ),
+                    evidence=(
+                        f"helm get values {nombre} -n {namespace}: "
+                        "ingress.enabled=true, ingress.tls ausente"
+                    ),
+                    remediation=(
+                        "Configurar TLS en el Ingress:\n"
+                        "  ingress:\n"
+                        "    tls:\n"
+                        "      - hosts: ['<dominio>']\n"
+                        "        secretName: '<tls-secret>'"
+                    ),
+                ))
+
     # ── Ejecución completa ─────────────────────────────────────────────────
 
     def run(self) -> int:
@@ -2405,6 +2580,10 @@ class K8SAuditor:
         self.fase7_opa()
         self.fase8_webhooks()
         self.fase9_cve()
+
+        # Fase 10: auditoría de Helm charts (v1.3, activa con --helm)
+        if self.audit_helm:
+            self._audit_helm_charts(self.findings)
 
         return self._calcular_exit_code()
 
@@ -2509,6 +2688,10 @@ def _construir_parser() -> argparse.ArgumentParser:
         help="Omite la fase de CVEs activos (fase 9): runc CVE-2025-52881 y ACM CVE-2026-66786",
     )
     p.add_argument(
+        "--helm", action="store_true",
+        help="Auditar Helm charts desplegados en el clúster (requiere helm CLI) — v1.3",
+    )
+    p.add_argument(
         "--verbose", "-v", action="store_true",
         help="Modo detallado: muestra evidencias adicionales en consola",
     )
@@ -2582,6 +2765,7 @@ def main() -> None:
         namespace   = args.namespace,
         skip_images = args.skip_images,
         skip_cve    = args.skip_cve,
+        audit_helm  = args.helm,
     )
 
     exit_code = auditor.run()

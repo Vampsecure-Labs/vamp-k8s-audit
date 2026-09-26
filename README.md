@@ -1,3 +1,4 @@
+<!-- © VampSecure Studios — VampSecure Labs Security Research Division -->
 # vamp-k8s-audit
 
 ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)
@@ -28,6 +29,13 @@ pip install fpdf2>=2.7
 ---
 
 ## Installation
+
+
+```bash
+pip install vamp-k8s-audit
+# o con Homebrew:
+brew install vampsecure-labs/labs/vamp-k8s-audit
+```
 
 ```bash
 git clone <repo-url> vamp-k8s-audit
@@ -188,3 +196,8 @@ clusters you do not have explicit permission to test is illegal and unethical.
 
 © VampSecure Studios — VampSecure Labs Security Research Division  
 All rights reserved. Authorized use only.
+
+---
+
+## Versión
+v1.3 — VampSecure Labs Security Research Division

@@ -4,7 +4,8 @@
 # vamp-k8s-audit
 
 ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)
-![License MIT](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-2.0-orange)
+![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green)
 ![VampSecure Labs](https://img.shields.io/badge/VampSecure-Labs-darkred)
 
 **Kubernetes Security Auditor** — part of the VampSecure Labs toolkit.
@@ -104,6 +105,7 @@ python3 vamp_k8s_audit.py \
 | `--engagement DESC` | Engagement description | — |
 | `--auditor NAME` | Auditor name | VampSecure Labs |
 | `--skip-images` | Skip image analysis (Phase 6) | false |
+| `--control-plane` | Activate Phase 10: CIS control plane checks (etcd, KCM, scheduler, kubelet) | false |
 | `--verbose` | Verbose mode | false |
 
 ---
@@ -118,6 +120,7 @@ python3 vamp_k8s_audit.py \
 | **4 — Network** | All namespaces | K8S-060..K8S-079 | LoadBalancer/NodePort exposure, missing NetworkPolicies, Ingress without TLS, Dashboard exposure, etcd TCP access |
 | **5 — Secrets** | All namespaces | K8S-080..K8S-099 | Secrets in plain env vars, secrets in ConfigMaps, Opaque secrets in default namespace |
 | **6 — Images & Runtime** | All pods | K8S-090..K8S-109 | `:latest` tags, public registries, missing readOnlyRootFilesystem, missing Pod Security Admission |
+| **10 — Control Plane CIS** (`--control-plane`) | Node manifest files | K8S-ETCD-*/K8S-KCM-*/K8S-KSCHED-* | CIS benchmark checks for etcd (8), kube-controller-manager (8), kube-scheduler (3), kubelet anonymous auth (1) |
 
 ### Finding Severity Distribution
 
@@ -201,5 +204,33 @@ All rights reserved. Authorized use only.
 
 ---
 
-## Versión
-v1.3 — VampSecure Labs Security Research Division
+## Phase 10 — Control Plane CIS (`--control-plane`)
+
+Inspects control plane component manifest files (`/etc/kubernetes/manifests/`) on the cluster nodes to verify CIS Kubernetes Benchmark compliance. Requires SSH access or a tool that can read node manifests.
+
+```bash
+python3 vamp_k8s_audit.py --control-plane
+python3 vamp_k8s_audit.py --control-plane --report-html control-plane-report.html
+```
+
+| Component | Check IDs | Count | Key Controls |
+|---|---|---|---|
+| etcd | K8S-ETCD-001..008 | 8 | TLS client certs, peer TLS, auto-tls disabled, cert/key permissions |
+| kube-controller-manager | K8S-KCM-001..008 | 8 | Profiling disabled, service account credentials, TLS cipher suites |
+| kube-scheduler | K8S-KSCHED-001..003 | 3 | Profiling disabled, TLS configuration |
+| kubelet | K8S-KUBELET-001 | 1 | Anonymous authentication disabled |
+
+---
+
+## Historial de versiones
+
+| Versión | Cambios principales |
+|---------|---------------------|
+| v2.0 | Fase 10 control plane CIS — `--control-plane`, 20 nuevos checks etcd/KCM/scheduler/kubelet |
+| v1.3 | Fases 1-6, Phase 6 imágenes, HTML report |
+| v1.0 | MVP RBAC + Pod Security + Network + Secrets |
+
+---
+
+© VampSecure Studios — VampSecure Labs Security Research Division  
+All rights reserved. Authorized use only.

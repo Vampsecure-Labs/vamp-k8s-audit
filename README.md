@@ -1,4 +1,6 @@
 <!-- © VampSecure Studios — VampSecure Labs Security Research Division -->
+
+  <img src="https://github.com/Vampsecure-Labs/vamp-k8s-audit/actions/workflows/ci.yml/badge.svg" alt="CI"/>
 # vamp-k8s-audit
 
 ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)

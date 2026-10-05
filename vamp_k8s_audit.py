@@ -18,21 +18,17 @@ Uso autorizado exclusivamente en entornos con permiso explícito.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import os
 import re
 import socket
 import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from vampsec_report import (
     Finding,
     VampSecReport,
-    add_report_args,
     meta_from_args,
 )
 
@@ -313,7 +309,7 @@ class K8SAuditor:
                     tags        = ["nodos", "versiones", "actualizaciones"],
                 ))
             else:
-                _log_clean(f"Versión de kubelet homogénea en todos los nodos")
+                _log_clean("Versión de kubelet homogénea en todos los nodos")
 
             # Nodos sin estado Ready
             for nodo in items:
@@ -451,10 +447,9 @@ class K8SAuditor:
             ["get", "configmap", "kubeadm-config", "-n", "kube-system",
              "-o", "yaml"]
         )
-        anon_habilitado = False
         if anon_config:
             if "anonymous-auth: true" in anon_config.lower() or "anonymous-auth=true" in anon_config:
-                anon_habilitado = True
+                pass
         # También verificar versión del servidor para la condición < 1.28
         version_data = _kubectl(["version", "--output", "json"])
         version_str = ""
@@ -1117,7 +1112,7 @@ class K8SAuditor:
                     mount_path = vm.get("mountPath", "")
                     vol_spec   = volumes_pod.get(vol_name, {})
                     host_path  = vol_spec.get("hostPath", {}).get("path", "")
-                    socket_path = vol_spec.get("hostPath", {}).get("path", "")
+                    vol_spec.get("hostPath", {}).get("path", "")
                     if host_path in RUTAS_SENSIBLES or any(
                         host_path.startswith(ruta) for ruta in RUTAS_SENSIBLES
                     ):
@@ -1336,7 +1331,7 @@ class K8SAuditor:
                         "namespaces y servicios que no deberían comunicarse entre sí."
                     ),
                     evidence    = (
-                        f"Namespaces sin NetworkPolicy (con pods activos):\n"
+                        "Namespaces sin NetworkPolicy (con pods activos):\n"
                         + "\n".join(ns_sin_np[:20])
                     ),
                     affected    = f"{len(ns_sin_np)} namespaces",
@@ -2565,7 +2560,7 @@ class K8SAuditor:
         """
         data = _kubectl(
             ["get", "pods", "-n", "kube-system",
-             "--field-selector", f"status.phase=Running",
+             "--field-selector", "status.phase=Running",
              "-o", "json"],
             context=self.context,
         )
@@ -3001,7 +2996,7 @@ class K8SAuditor:
             for nodo in nodos_data.get("items", [])[:5]:  # hasta 5 nodos
                 nombre_nodo = nodo.get("metadata", {}).get("name", "desconocido")
                 node_info   = nodo.get("status", {}).get("nodeInfo", {})
-                kubelet_ver = node_info.get("kubeletVersion", "")
+                node_info.get("kubeletVersion", "")
 
                 # CIS 4.2.1 — --anonymous-auth=false
                 kubelet_cfg = _kubectl(

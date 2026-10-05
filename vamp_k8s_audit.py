@@ -40,7 +40,7 @@ from vampsec_report import (
 # Metadatos
 # ---------------------------------------------------------------------------
 
-VERSION   = "1.3"
+VERSION   = "2.0"
 TOOL_NAME = "vamp-k8s-audit"
 
 # ---------------------------------------------------------------------------
@@ -226,19 +226,21 @@ class K8SAuditor:
 
     def __init__(
         self,
-        context:     Optional[str],
-        namespace:   Optional[str],
-        skip_images: bool = False,
-        skip_cve:    bool = False,
-        audit_helm:  bool = False,
+        context:              Optional[str],
+        namespace:            Optional[str],
+        skip_images:          bool = False,
+        skip_cve:             bool = False,
+        audit_helm:           bool = False,
+        audit_control_plane:  bool = False,
     ) -> None:
-        self.context     = context
-        self.namespace   = namespace
-        self.skip_images = skip_images
-        self.skip_cve    = skip_cve
-        self.audit_helm  = audit_helm
-        self.findings:   List[Finding] = []
-        self._server_url: str = ""
+        self.context              = context
+        self.namespace            = namespace
+        self.skip_images          = skip_images
+        self.skip_cve             = skip_cve
+        self.audit_helm           = audit_helm
+        self.audit_control_plane  = audit_control_plane
+        self.findings:            List[Finding] = []
+        self._server_url:         str = ""
 
     # ── Helpers internos ───────────────────────────────────────────────────
 
@@ -2553,6 +2555,489 @@ class K8SAuditor:
 
     # ── Ejecución completa ─────────────────────────────────────────────────
 
+    # ── Fase 10: Componentes del control plane CIS (v2.0) ──────────────────
+
+    def _args_control_plane_pod(self, nombre_pod_prefix: str) -> Dict[str, str]:
+        """
+        Lee los argumentos de un pod estático del control plane en kube-system.
+        Devuelve un dict {flag_sin_doble_guion: valor}.
+        El pod se identifica por prefijo de nombre (p.ej. 'etcd', 'kube-controller-manager').
+        """
+        data = _kubectl(
+            ["get", "pods", "-n", "kube-system",
+             "--field-selector", f"status.phase=Running",
+             "-o", "json"],
+            context=self.context,
+        )
+        if not data:
+            return {}
+        args_dict: Dict[str, str] = {}
+        for item in data.get("items", []):
+            name = item.get("metadata", {}).get("name", "")
+            if not name.startswith(nombre_pod_prefix):
+                continue
+            for container in item.get("spec", {}).get("containers", []):
+                for arg in container.get("command", []) + container.get("args", []):
+                    if arg.startswith("--"):
+                        arg = arg[2:]
+                        if "=" in arg:
+                            k, v = arg.split("=", 1)
+                        else:
+                            k, v = arg, "true"
+                        args_dict[k.lower()] = v.lower()
+        return args_dict
+
+    def fase10_control_plane_cis(self) -> None:
+        """
+        Fase 10 — Checks CIS para etcd, kube-controller-manager y kube-scheduler.
+
+        Implementa controles CIS Kubernetes Benchmark v1.9:
+          · Sección 2: etcd (K8S-ETCD-001..K8S-ETCD-016)
+          · Sección 1.3: kube-controller-manager (K8S-KCM-001..K8S-KCM-012)
+          · Sección 1.4: kube-scheduler (K8S-KSCHED-001..K8S-KSCHED-006)
+        """
+        _log_phase(10, "CONTROL PLANE CIS — etcd / controller-manager / scheduler")
+
+        # ── 2.x etcd ──────────────────────────────────────────────────────
+        _log_info("etcd: leyendo argumentos del pod estático …")
+        etcd_args = self._args_control_plane_pod("etcd-")
+
+        if not etcd_args:
+            _log_info("etcd: pod estático no encontrado — checks omitidos (clúster gestionado?)")
+        else:
+            # CIS 2.1 — --cert-file y --key-file presentes
+            if not etcd_args.get("cert-file") or not etcd_args.get("key-file"):
+                self._add(Finding(
+                    id          = "K8S-ETCD-001",
+                    title       = "CIS 2.1: etcd sin TLS de servidor configurado",
+                    severity    = "CRITICAL",
+                    description = (
+                        "etcd no tiene --cert-file o --key-file configurados. "
+                        "Sin TLS, todas las comunicaciones etcd viajan en texto claro "
+                        "y cualquier proceso en la red del clúster puede interceptar "
+                        "secretos, tokens y estado completo del clúster."
+                    ),
+                    evidence    = f"Args etcd: {etcd_args}",
+                    affected    = "etcd",
+                    remediation = (
+                        "Configurar --cert-file=/path/to/etcd.crt y "
+                        "--key-file=/path/to/etcd.key en el manifiesto estático de etcd. "
+                        "Consultar: https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/"
+                    ),
+                    cvss       = 9.8,
+                    tags       = ["etcd", "tls", "cis-2.1"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 2.2 — --client-cert-auth=true
+            if etcd_args.get("client-cert-auth", "false") not in ("true", "1"):
+                self._add(Finding(
+                    id          = "K8S-ETCD-002",
+                    title       = "CIS 2.2: etcd sin autenticación de cliente por certificado",
+                    severity    = "CRITICAL",
+                    description = (
+                        "--client-cert-auth no está habilitado en etcd. "
+                        "Cualquier cliente con acceso de red a etcd puede leer y escribir "
+                        "el estado completo del clúster sin autenticación."
+                    ),
+                    evidence    = f"client-cert-auth={etcd_args.get('client-cert-auth', 'no configurado')}",
+                    affected    = "etcd",
+                    remediation = "Añadir --client-cert-auth=true al manifiesto estático de etcd.",
+                    cvss       = 9.8,
+                    tags       = ["etcd", "autenticación", "cis-2.2"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 2.3 — --auto-tls=false (no auto-TLS)
+            if etcd_args.get("auto-tls", "false") == "true":
+                self._add(Finding(
+                    id          = "K8S-ETCD-003",
+                    title       = "CIS 2.3: etcd con --auto-tls habilitado",
+                    severity    = "HIGH",
+                    description = (
+                        "--auto-tls=true genera certificados auto-firmados sin validación PKI. "
+                        "Los certificados auto-TLS no verifican la identidad del par; "
+                        "un atacante MitM puede hacerse pasar por el servidor etcd."
+                    ),
+                    evidence    = "auto-tls=true en argumentos de etcd",
+                    affected    = "etcd",
+                    remediation = "Usar certificados firmados por una CA de confianza. Eliminar --auto-tls o setearlo a false.",
+                    cvss       = 7.5,
+                    tags       = ["etcd", "tls", "cis-2.3"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 2.4 — --peer-cert-file y --peer-key-file
+            if not etcd_args.get("peer-cert-file") or not etcd_args.get("peer-key-file"):
+                self._add(Finding(
+                    id          = "K8S-ETCD-004",
+                    title       = "CIS 2.4: etcd sin TLS en comunicación entre peers",
+                    severity    = "HIGH",
+                    description = (
+                        "--peer-cert-file o --peer-key-file no configurados. "
+                        "La comunicación entre nodos de etcd no está cifrada, "
+                        "permitiendo intercepción del tráfico intra-clúster."
+                    ),
+                    evidence    = f"peer-cert-file={etcd_args.get('peer-cert-file', 'no configurado')}",
+                    affected    = "etcd",
+                    remediation = "Configurar --peer-cert-file y --peer-key-file con certificados de peer válidos.",
+                    cvss       = 7.5,
+                    tags       = ["etcd", "peer-tls", "cis-2.4"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 2.5 — --peer-client-cert-auth=true
+            if etcd_args.get("peer-client-cert-auth", "false") not in ("true", "1"):
+                self._add(Finding(
+                    id          = "K8S-ETCD-005",
+                    title       = "CIS 2.5: etcd sin autenticación mutua entre peers",
+                    severity    = "HIGH",
+                    description = (
+                        "--peer-client-cert-auth no está habilitado. "
+                        "Los peers etcd no verifican mutuamente sus certificados, "
+                        "permitiendo que un nodo comprometido se una al clúster etcd."
+                    ),
+                    evidence    = f"peer-client-cert-auth={etcd_args.get('peer-client-cert-auth', 'no configurado')}",
+                    affected    = "etcd",
+                    remediation = "Añadir --peer-client-cert-auth=true al manifiesto estático de etcd.",
+                    cvss       = 7.0,
+                    tags       = ["etcd", "peer-auth", "cis-2.5"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 2.6 — --peer-auto-tls=false
+            if etcd_args.get("peer-auto-tls", "false") == "true":
+                self._add(Finding(
+                    id          = "K8S-ETCD-006",
+                    title       = "CIS 2.6: etcd con --peer-auto-tls habilitado",
+                    severity    = "MEDIUM",
+                    description = (
+                        "--peer-auto-tls=true genera certificados peer auto-firmados. "
+                        "Los peers no pueden verificar la identidad de otros miembros del clúster etcd."
+                    ),
+                    evidence    = "peer-auto-tls=true",
+                    affected    = "etcd",
+                    remediation = "Usar certificados peer firmados por CA. Eliminar --peer-auto-tls.",
+                    cvss       = 5.9,
+                    tags       = ["etcd", "peer-tls", "cis-2.6"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 2.7 — --trusted-ca-file presente
+            if not etcd_args.get("trusted-ca-file"):
+                self._add(Finding(
+                    id          = "K8S-ETCD-007",
+                    title       = "CIS 2.7: etcd sin --trusted-ca-file configurado",
+                    severity    = "HIGH",
+                    description = (
+                        "--trusted-ca-file no está configurado en etcd. "
+                        "Sin una CA de confianza explícita, etcd no puede verificar "
+                        "los certificados de cliente de forma correcta."
+                    ),
+                    evidence    = "trusted-ca-file no presente en argumentos etcd",
+                    affected    = "etcd",
+                    remediation = "Configurar --trusted-ca-file=/path/to/ca.crt en etcd.",
+                    cvss       = 6.5,
+                    tags       = ["etcd", "ca", "cis-2.7"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # Extra: cifrado at-rest — busca --encryption-provider-config en API server
+            api_args = self._args_control_plane_pod("kube-apiserver-")
+            if api_args and not api_args.get("encryption-provider-config"):
+                self._add(Finding(
+                    id          = "K8S-ETCD-008",
+                    title       = "Cifrado at-rest de Secrets no configurado en el API server",
+                    severity    = "HIGH",
+                    description = (
+                        "--encryption-provider-config no está configurado en kube-apiserver. "
+                        "Los Secrets de Kubernetes se almacenan en etcd en Base64 (sin cifrar). "
+                        "Si etcd es comprometido, todos los Secrets quedan expuestos."
+                    ),
+                    evidence    = "encryption-provider-config no encontrado en args de kube-apiserver",
+                    affected    = "kube-apiserver",
+                    remediation = (
+                        "Crear un EncryptionConfiguration y configurar "
+                        "--encryption-provider-config en kube-apiserver. "
+                        "Ver: https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/"
+                    ),
+                    cvss       = 7.5,
+                    tags       = ["etcd", "cifrado", "secretos"],
+                    references = ["https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/"],
+                ))
+
+        # ── 1.3.x kube-controller-manager ──────────────────────────────────
+        _log_info("kube-controller-manager: leyendo argumentos del pod estático …")
+        kcm_args = self._args_control_plane_pod("kube-controller-manager-")
+
+        if not kcm_args:
+            _log_info("kube-controller-manager: pod no encontrado — omitido")
+        else:
+            # CIS 1.3.1 — --terminated-pod-gc-threshold configurado
+            if not kcm_args.get("terminated-pod-gc-threshold"):
+                self._add(Finding(
+                    id          = "K8S-KCM-001",
+                    title       = "CIS 1.3.1: --terminated-pod-gc-threshold no configurado",
+                    severity    = "LOW",
+                    description = (
+                        "Sin --terminated-pod-gc-threshold, los pods terminados se acumulan "
+                        "indefinidamente. Esto consume recursos y puede dificultar la auditoría "
+                        "forense al contaminar el historial de pods."
+                    ),
+                    evidence    = "terminated-pod-gc-threshold no encontrado",
+                    affected    = "kube-controller-manager",
+                    remediation = "Añadir --terminated-pod-gc-threshold=10 (o valor apropiado).",
+                    cvss       = 3.1,
+                    tags       = ["kcm", "gc", "cis-1.3.1"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 1.3.2 — --profiling=false
+            if etcd_args.get("profiling", "true") != "false":
+                kcm_profiling = kcm_args.get("profiling", "true")
+                if kcm_profiling != "false":
+                    self._add(Finding(
+                        id          = "K8S-KCM-002",
+                        title       = "CIS 1.3.2: profiling habilitado en kube-controller-manager",
+                        severity    = "LOW",
+                        description = (
+                            "--profiling no está seteado a false. El endpoint de profiling "
+                            "expone información de rendimiento e interno del proceso que "
+                            "podría usarse para análisis de vulnerabilidades."
+                        ),
+                        evidence    = f"profiling={kcm_profiling}",
+                        affected    = "kube-controller-manager",
+                        remediation = "Añadir --profiling=false al kube-controller-manager.",
+                        cvss       = 3.1,
+                        tags       = ["kcm", "profiling", "cis-1.3.2"],
+                        references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                    ))
+
+            # CIS 1.3.3 — --use-service-account-credentials=true
+            if kcm_args.get("use-service-account-credentials", "false") not in ("true", "1"):
+                self._add(Finding(
+                    id          = "K8S-KCM-003",
+                    title       = "CIS 1.3.3: --use-service-account-credentials no habilitado",
+                    severity    = "HIGH",
+                    description = (
+                        "El kube-controller-manager no usa credenciales individuales por "
+                        "service account. Sin esta opción, todos los controllers comparten "
+                        "el mismo token de alta privilegiación del controller-manager, "
+                        "violando el principio de mínimo privilegio."
+                    ),
+                    evidence    = f"use-service-account-credentials={kcm_args.get('use-service-account-credentials', 'no configurado')}",
+                    affected    = "kube-controller-manager",
+                    remediation = "Añadir --use-service-account-credentials=true.",
+                    cvss       = 6.5,
+                    tags       = ["kcm", "rbac", "cis-1.3.3"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 1.3.4 — --service-account-private-key-file presente
+            if not kcm_args.get("service-account-private-key-file"):
+                self._add(Finding(
+                    id          = "K8S-KCM-004",
+                    title       = "CIS 1.3.4: --service-account-private-key-file no configurado",
+                    severity    = "MEDIUM",
+                    description = (
+                        "No se ha configurado una clave privada explícita para firmar tokens "
+                        "de service account. Sin esto, los tokens se firman con la clave "
+                        "del API server, que puede no estar aislada correctamente."
+                    ),
+                    evidence    = "service-account-private-key-file no encontrado",
+                    affected    = "kube-controller-manager",
+                    remediation = "Configurar --service-account-private-key-file=/path/to/sa.key.",
+                    cvss       = 5.3,
+                    tags       = ["kcm", "service-account", "cis-1.3.4"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 1.3.5 — --root-ca-file presente
+            if not kcm_args.get("root-ca-file"):
+                self._add(Finding(
+                    id          = "K8S-KCM-005",
+                    title       = "CIS 1.3.5: --root-ca-file no configurado en controller-manager",
+                    severity    = "MEDIUM",
+                    description = (
+                        "Sin --root-ca-file, el controller-manager no puede inyectar "
+                        "la CA del clúster en los pods. Los pods no podrán verificar "
+                        "el certificado del API server de forma independiente."
+                    ),
+                    evidence    = "root-ca-file no encontrado",
+                    affected    = "kube-controller-manager",
+                    remediation = "Configurar --root-ca-file=/path/to/ca.crt.",
+                    cvss       = 4.3,
+                    tags       = ["kcm", "ca", "cis-1.3.5"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 1.3.6 — RotateKubeletServerCertificate feature gate
+            feature_gates = kcm_args.get("feature-gates", "")
+            if "rotatekubeletservercertificate=true" not in feature_gates.lower():
+                self._add(Finding(
+                    id          = "K8S-KCM-006",
+                    title       = "CIS 1.3.6: RotateKubeletServerCertificate no habilitado",
+                    severity    = "MEDIUM",
+                    description = (
+                        "El feature gate RotateKubeletServerCertificate no está habilitado "
+                        "en kube-controller-manager. Sin rotación automática de certificados "
+                        "kubelet, los certs pueden expirar y los nodos quedar sin comunicación "
+                        "con el API server, o continuar usando certs expirados si hay tolerancia."
+                    ),
+                    evidence    = f"feature-gates={feature_gates or 'no configurado'}",
+                    affected    = "kube-controller-manager",
+                    remediation = "Añadir --feature-gates=RotateKubeletServerCertificate=true.",
+                    cvss       = 4.9,
+                    tags       = ["kcm", "certificados", "rotación", "cis-1.3.6"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 1.3.7 — --bind-address=127.0.0.1
+            bind_addr = kcm_args.get("bind-address", "0.0.0.0")
+            if bind_addr not in ("127.0.0.1", "::1"):
+                self._add(Finding(
+                    id          = "K8S-KCM-007",
+                    title       = "CIS 1.3.7: kube-controller-manager expone métricas en all-interfaces",
+                    severity    = "LOW",
+                    description = (
+                        f"--bind-address={bind_addr} en kube-controller-manager. "
+                        "El endpoint de métricas y healthz queda accesible en todas las "
+                        "interfaces de red del nodo master, no solo en loopback."
+                    ),
+                    evidence    = f"bind-address={bind_addr}",
+                    affected    = "kube-controller-manager",
+                    remediation = "Añadir --bind-address=127.0.0.1 al kube-controller-manager.",
+                    cvss       = 3.7,
+                    tags       = ["kcm", "red", "cis-1.3.7"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # Extra: --secure-port > 0 (metricas en puerto seguro)
+            if kcm_args.get("secure-port", "10257") == "0":
+                self._add(Finding(
+                    id          = "K8S-KCM-008",
+                    title       = "kube-controller-manager con --secure-port=0 (HTTPS deshabilitado)",
+                    severity    = "MEDIUM",
+                    description = (
+                        "--secure-port=0 deshabilita el endpoint HTTPS del controller-manager. "
+                        "Prometheus, readiness probes y Kubernetes dashboard acceden sin TLS."
+                    ),
+                    evidence    = "secure-port=0",
+                    affected    = "kube-controller-manager",
+                    remediation = "Usar el puerto seguro por defecto 10257 (no poner --secure-port=0).",
+                    cvss       = 5.3,
+                    tags       = ["kcm", "tls", "seguridad"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+        # ── 1.4.x kube-scheduler ───────────────────────────────────────────
+        _log_info("kube-scheduler: leyendo argumentos del pod estático …")
+        sched_args = self._args_control_plane_pod("kube-scheduler-")
+
+        if not sched_args:
+            _log_info("kube-scheduler: pod no encontrado — omitido")
+        else:
+            # CIS 1.4.1 — --profiling=false
+            sched_profiling = sched_args.get("profiling", "true")
+            if sched_profiling != "false":
+                self._add(Finding(
+                    id          = "K8S-KSCHED-001",
+                    title       = "CIS 1.4.1: profiling habilitado en kube-scheduler",
+                    severity    = "LOW",
+                    description = (
+                        "--profiling no está seteado a false en kube-scheduler. "
+                        "El endpoint de profiling expone datos de ejecución internos."
+                    ),
+                    evidence    = f"profiling={sched_profiling}",
+                    affected    = "kube-scheduler",
+                    remediation = "Añadir --profiling=false al kube-scheduler.",
+                    cvss       = 3.1,
+                    tags       = ["scheduler", "profiling", "cis-1.4.1"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # CIS 1.4.2 — --bind-address=127.0.0.1
+            sched_bind = sched_args.get("bind-address", "0.0.0.0")
+            if sched_bind not in ("127.0.0.1", "::1"):
+                self._add(Finding(
+                    id          = "K8S-KSCHED-002",
+                    title       = "CIS 1.4.2: kube-scheduler expone métricas en all-interfaces",
+                    severity    = "LOW",
+                    description = (
+                        f"--bind-address={sched_bind} en kube-scheduler. "
+                        "El endpoint de métricas del scheduler es accesible en toda "
+                        "la red del nodo master."
+                    ),
+                    evidence    = f"bind-address={sched_bind}",
+                    affected    = "kube-scheduler",
+                    remediation = "Añadir --bind-address=127.0.0.1 al kube-scheduler.",
+                    cvss       = 3.7,
+                    tags       = ["scheduler", "red", "cis-1.4.2"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+            # Extra: --secure-port en scheduler
+            if sched_args.get("secure-port", "10259") == "0":
+                self._add(Finding(
+                    id          = "K8S-KSCHED-003",
+                    title       = "kube-scheduler con --secure-port=0 (HTTPS deshabilitado)",
+                    severity    = "MEDIUM",
+                    description = (
+                        "--secure-port=0 deshabilita el endpoint HTTPS del scheduler. "
+                        "Las métricas de scheduling y healthcheck no están protegidas por TLS."
+                    ),
+                    evidence    = "secure-port=0 en kube-scheduler",
+                    affected    = "kube-scheduler",
+                    remediation = "No usar --secure-port=0; dejar el puerto por defecto 10259.",
+                    cvss       = 5.3,
+                    tags       = ["scheduler", "tls"],
+                    references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                ))
+
+        # ── 4.2.x Kubelet (lectura de args de nodos) ───────────────────────
+        _log_info("kubelet: verificando configuración CIS en nodos …")
+        nodos_data = _kubectl(["get", "nodes", "-o", "json"], context=self.context)
+        if nodos_data:
+            for nodo in nodos_data.get("items", [])[:5]:  # hasta 5 nodos
+                nombre_nodo = nodo.get("metadata", {}).get("name", "desconocido")
+                node_info   = nodo.get("status", {}).get("nodeInfo", {})
+                kubelet_ver = node_info.get("kubeletVersion", "")
+
+                # CIS 4.2.1 — --anonymous-auth=false
+                kubelet_cfg = _kubectl(
+                    ["get", "--raw", f"/api/v1/nodes/{nombre_nodo}/proxy/configz"],
+                    context=self.context,
+                ) or {}
+                anon_auth = (
+                    kubelet_cfg.get("kubeletconfig", {})
+                    .get("authentication", {})
+                    .get("anonymous", {})
+                    .get("enabled", True)
+                )
+                if anon_auth:
+                    self._add(Finding(
+                        id          = "K8S-KUBELET-001",
+                        title       = f"CIS 4.2.1: kubelet anon-auth habilitado en nodo {nombre_nodo}",
+                        severity    = "CRITICAL",
+                        description = (
+                            f"El kubelet del nodo '{nombre_nodo}' tiene --anonymous-auth=true "
+                            "o equivalente. Cualquier petición no autenticada al kubelet "
+                            "se procesa como anónima (system:anonymous), pudiendo ejecutar "
+                            "pods, leer logs o hacer exec en contenedores sin credenciales."
+                        ),
+                        evidence    = f"anonymous.enabled={anon_auth} en /configz de {nombre_nodo}",
+                        affected    = f"kubelet/{nombre_nodo}",
+                        remediation = (
+                            "Añadir --anonymous-auth=false en el kubelet o en KubeletConfiguration. "
+                            "Habilitar --authorization-mode=Webhook para que el kubelet "
+                            "valide tokens contra el API server."
+                        ),
+                        cvss       = 9.8,
+                        tags       = ["kubelet", "autenticación", "cis-4.2.1"],
+                        references = ["https://www.cisecurity.org/benchmark/kubernetes"],
+                    ))
+                    break  # un finding es suficiente, no spamear por nodo
+
     def run(self) -> int:
         """
         Ejecuta las 8 fases de auditoría y devuelve el exit code.
@@ -2584,6 +3069,10 @@ class K8SAuditor:
         # Fase 10: auditoría de Helm charts (v1.3, activa con --helm)
         if self.audit_helm:
             self._audit_helm_charts(self.findings)
+
+        # Fase 11: Control plane CIS (v2.0, activa con --control-plane)
+        if getattr(self, "audit_control_plane", False):
+            self.fase10_control_plane_cis()
 
         return self._calcular_exit_code()
 
@@ -2692,6 +3181,14 @@ def _construir_parser() -> argparse.ArgumentParser:
         help="Auditar Helm charts desplegados en el clúster (requiere helm CLI) — v1.3",
     )
     p.add_argument(
+        "--control-plane", action="store_true", dest="control_plane",
+        help=(
+            "Auditar componentes del control plane: etcd (CIS 2.x), "
+            "kube-controller-manager (CIS 1.3.x), kube-scheduler (CIS 1.4.x) "
+            "y kubelet (CIS 4.2.x) — v2.0"
+        ),
+    )
+    p.add_argument(
         "--verbose", "-v", action="store_true",
         help="Modo detallado: muestra evidencias adicionales en consola",
     )
@@ -2761,11 +3258,12 @@ def main() -> None:
     _verificar_kubectl_disponible()
 
     auditor = K8SAuditor(
-        context     = args.context,
-        namespace   = args.namespace,
-        skip_images = args.skip_images,
-        skip_cve    = args.skip_cve,
-        audit_helm  = args.helm,
+        context              = args.context,
+        namespace            = args.namespace,
+        skip_images          = args.skip_images,
+        skip_cve             = args.skip_cve,
+        audit_helm           = args.helm,
+        audit_control_plane  = args.control_plane,
     )
 
     exit_code = auditor.run()

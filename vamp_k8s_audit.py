@@ -23,6 +23,7 @@ import re
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,7 +37,7 @@ from vampsec_report import (
 # Metadatos
 # ---------------------------------------------------------------------------
 
-VERSION   = "2.0"
+VERSION   = "2.1"
 TOOL_NAME = "vamp-k8s-audit"
 
 # ---------------------------------------------------------------------------
@@ -3118,6 +3119,26 @@ def _imprimir_resumen(hallazgos: list) -> None:
 # Punto de entrada CLI
 # ---------------------------------------------------------------------------
 
+def apply_delta_scan(
+    findings: "List[Finding]", delta_path: str
+) -> "tuple[List[Finding], List[str], List[str], List[str]]":
+    """
+    Compara hallazgos actuales con un informe JSON previo (--delta FILE).
+    Clave única: finding.id (e.g. K8S-001).
+    Devuelve (findings, new_ids, recurring_ids, resolved_ids).
+    """
+    try:
+        baseline_data = json.loads(Path(delta_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"No se puede leer el delta baseline '{delta_path}': {exc}") from exc
+    baseline_ids = {f["id"] for f in baseline_data.get("findings", []) if "id" in f}
+    current_ids  = {f.id for f in findings}
+    new_ids      = sorted(current_ids - baseline_ids)
+    recurring_ids = sorted(current_ids & baseline_ids)
+    resolved_ids  = sorted(baseline_ids - current_ids)
+    return findings, new_ids, recurring_ids, resolved_ids
+
+
 def _construir_parser() -> argparse.ArgumentParser:
     """Construye y devuelve el parser de argumentos CLI."""
     p = argparse.ArgumentParser(
@@ -3186,6 +3207,11 @@ def _construir_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--verbose", "-v", action="store_true",
         help="Modo detallado: muestra evidencias adicionales en consola",
+    )
+    p.add_argument(
+        "--delta", metavar="FILE", default=None,
+        help="Delta scan: comparar con un informe JSON previo (--output). "
+             "Muestra hallazgos como NEW/RECURRING y lista los RESOLVED.",
     )
     p.add_argument(
         "--version", action="version",
@@ -3263,6 +3289,25 @@ def main() -> None:
 
     exit_code = auditor.run()
     _imprimir_resumen(auditor.findings)
+
+    # ── Delta scan (--delta) ─────────────────────────────────────────────────
+    if getattr(args, "delta", None):
+        try:
+            _, new_ids, recurring_ids, resolved_ids = apply_delta_scan(
+                auditor.findings, args.delta
+            )
+            print(
+                f"\n  {ANSI_BOLD}DELTA vs {args.delta}:{ANSI_RESET} "
+                f"{ANSI_GREEN}{len(new_ids)} NEW{ANSI_RESET} · "
+                f"{len(recurring_ids)} RECURRING · "
+                f"{len(resolved_ids)} RESOLVED"
+            )
+            if new_ids:
+                print(f"  [+NEW     ] {', '.join(new_ids)}")
+            if resolved_ids:
+                print(f"  [-RESOLVED] {', '.join(resolved_ids)}")
+        except ValueError as exc:
+            print(f"  {ANSI_RED}[!] Delta error: {exc}{ANSI_RESET}")
 
     # ── Exportar JSON
     if args.output:

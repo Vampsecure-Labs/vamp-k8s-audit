@@ -332,3 +332,51 @@ class TestOrdenFindigns:
 
         for f in auditor.findings:
             assert f.id, f"Finding sin ID detectado: {f}"
+
+
+class TestDeltaScan:
+    """Tests para --delta FILE (delta scan, v2.1)."""
+
+    def _make_finding(self, fid: str) -> object:
+        from vampsec_report import Finding
+        return Finding(id=fid, title="Test", severity="HIGH",
+                       description="d", evidence="e", affected="a", remediation="r")
+
+    def test_apply_delta_scan_new_y_recurring(self, tmp_path):
+        import json
+        from vamp_k8s_audit import apply_delta_scan
+        baseline = {"findings": [{"id": "K8S-001"}, {"id": "K8S-002"}]}
+        bp = tmp_path / "baseline.json"
+        bp.write_text(json.dumps(baseline))
+        findings = [self._make_finding("K8S-001"), self._make_finding("K8S-999")]
+        _, new_ids, recurring_ids, resolved_ids = apply_delta_scan(findings, str(bp))
+        assert "K8S-999" in new_ids
+        assert "K8S-001" in recurring_ids
+        assert "K8S-002" in resolved_ids
+
+    def test_apply_delta_scan_todo_nuevo_sin_baseline(self, tmp_path):
+        import json
+        from vamp_k8s_audit import apply_delta_scan
+        baseline = {"findings": []}
+        bp = tmp_path / "baseline.json"
+        bp.write_text(json.dumps(baseline))
+        findings = [self._make_finding("K8S-001")]
+        _, new_ids, recurring_ids, resolved_ids = apply_delta_scan(findings, str(bp))
+        assert "K8S-001" in new_ids
+        assert len(recurring_ids) == 0
+        assert len(resolved_ids) == 0
+
+    def test_argparser_acepta_delta(self):
+        import sys
+        from vamp_k8s_audit import _construir_parser
+        old_argv = sys.argv
+        sys.argv = ["vamp-k8s-audit", "--delta", "prev.json"]
+        try:
+            args = _construir_parser().parse_args()
+            assert args.delta == "prev.json"
+        finally:
+            sys.argv = old_argv
+
+    def test_version_es_21(self):
+        from vamp_k8s_audit import VERSION
+        assert VERSION == "2.1"

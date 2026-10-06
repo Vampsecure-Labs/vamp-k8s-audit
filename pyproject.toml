@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vamp-k8s-audit"
-version = "2.1"
+version = "2.2.0"
 description = "Kubernetes cluster security auditor for authorized assessments, with delta scan"
 readme = "README.md"
 license = { text = "AGPL-3.0-only" }
@@ -31,4 +31,5 @@ Homepage = "https://github.com/Vampsecure-Labs/vamp-k8s-audit"
 Repository = "https://github.com/Vampsecure-Labs/vamp-k8s-audit"
 
 [tool.setuptools]
-py-modules = ["vamp_k8s_audit", "vampsec_report"]
+packages = ["vamp_k8s_audit"]
+py-modules = ["vampsec_report"]

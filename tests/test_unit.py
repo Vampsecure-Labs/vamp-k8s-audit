@@ -62,7 +62,7 @@ class TestPodPrivilegiado:
         """Pod con privileged=true debe generar hallazgo K8S-030 CRITICAL."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_privilegiado_json)
             auditor.fase3_pods()
 
@@ -76,7 +76,7 @@ class TestPodPrivilegiado:
         """La evidencia del hallazgo debe mencionar el pod afectado."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_privilegiado_json)
             auditor.fase3_pods()
 
@@ -96,7 +96,7 @@ class TestHostNetwork:
         """Pod con hostNetwork=true debe generar hallazgo K8S-036 HIGH."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_host_network_json)
             auditor.fase3_pods()
 
@@ -110,7 +110,7 @@ class TestHostNetwork:
         """La evidencia debe indicar hostNetwork=true."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_host_network_json)
             auditor.fase3_pods()
 
@@ -130,7 +130,7 @@ class TestRunAsRoot:
         """runAsUser=0 explícito debe generar K8S-031 HIGH."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_privilegiado_json)
             auditor.fase3_pods()
 
@@ -152,7 +152,7 @@ class TestPrivilegeEscalation:
         """allowPrivilegeEscalation=true explícito genera K8S-032 HIGH."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_privilegiado_json)
             auditor.fase3_pods()
 
@@ -185,8 +185,8 @@ class TestClusterRoleWildcard:
                 return {"items": []}
             return None
 
-        with patch("vamp_k8s_audit._kubectl", side_effect=mock_kubectl):
-            with patch("vamp_k8s_audit._kubectl_raw", return_value=""):
+        with patch("vamp_k8s_audit._core._kubectl", side_effect=mock_kubectl):
+            with patch("vamp_k8s_audit._core._kubectl_raw", return_value=""):
                 auditor.fase2_rbac()
 
         criticos = [
@@ -204,8 +204,8 @@ class TestClusterRoleWildcard:
                 return json.loads(clusterrole_wildcard_json)
             return {"items": []}
 
-        with patch("vamp_k8s_audit._kubectl", side_effect=mock_kubectl):
-            with patch("vamp_k8s_audit._kubectl_raw", return_value=""):
+        with patch("vamp_k8s_audit._core._kubectl", side_effect=mock_kubectl):
+            with patch("vamp_k8s_audit._core._kubectl_raw", return_value=""):
                 auditor.fase2_rbac()
 
         hallazgos = [f for f in auditor.findings if "K8S-011" in f.id]
@@ -236,8 +236,8 @@ class TestSACLusterAdmin:
                 return {"items": []}
             return None
 
-        with patch("vamp_k8s_audit._kubectl", side_effect=mock_kubectl):
-            with patch("vamp_k8s_audit._kubectl_raw", return_value=""):
+        with patch("vamp_k8s_audit._core._kubectl", side_effect=mock_kubectl):
+            with patch("vamp_k8s_audit._core._kubectl_raw", return_value=""):
                 auditor.fase2_rbac()
 
         criticos = [
@@ -274,7 +274,7 @@ class TestNetworkPolicyAusente:
                 return {"items": []}
             return None
 
-        with patch("vamp_k8s_audit._kubectl", side_effect=mock_kubectl):
+        with patch("vamp_k8s_audit._core._kubectl", side_effect=mock_kubectl):
             with patch("vamp_k8s_audit.K8SAuditor._check_etcd_expuesto"):
                 auditor._server_url = ""
                 auditor.fase4_red()
@@ -297,7 +297,7 @@ class TestSinLimitesRecursos:
         """Pod sin resource.limits debe generar K8S-038 LOW."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_privilegiado_json)
             auditor.fase3_pods()
 
@@ -316,7 +316,7 @@ class TestOrdenFindigns:
         """Después de fase3_pods, la lista findings debe tener al menos un elemento."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_privilegiado_json)
             auditor.fase3_pods()
 
@@ -326,7 +326,7 @@ class TestOrdenFindigns:
         """Cada finding debe tener un ID no vacío."""
         auditor = _make_auditor()
 
-        with patch("vamp_k8s_audit._kubectl") as mock_kubectl:
+        with patch("vamp_k8s_audit._core._kubectl") as mock_kubectl:
             mock_kubectl.return_value = json.loads(pod_privilegiado_json)
             auditor.fase3_pods()
 
@@ -377,6 +377,6 @@ class TestDeltaScan:
         finally:
             sys.argv = old_argv
 
-    def test_version_es_21(self):
+    def test_version_es_220(self):
         from vamp_k8s_audit import VERSION
-        assert VERSION == "2.1"
+        assert VERSION == "2.2.0"

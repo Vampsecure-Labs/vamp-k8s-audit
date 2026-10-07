@@ -13,13 +13,12 @@ import vamp_k8s_audit._core as _core
 
 from ._models import (
     VERSION, TOOL_NAME,
-    ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_ORANGE, ANSI_YELLOW,
-    ANSI_BLUE, ANSI_CYAN, ANSI_GREEN, ANSI_GREY, ANSI_DIM, ANSI_WHITE,
-    _SEV_COLOR, _color, _sev_badge,
+    ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_YELLOW,
+    ANSI_CYAN, ANSI_GREEN, ANSI_GREY, ANSI_DIM, ANSI_WHITE,
+    _SEV_COLOR, _color,
 )
 from ._core import (
     K8SAuditor, apply_delta_scan,
-    _log_info, _log_warn,
     _inicializar_kubectl, _verificar_kubectl_disponible,
 )
 from ._report import VampSecReport, meta_from_args

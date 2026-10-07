@@ -14,12 +14,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ._models import (
-    VERSION, TOOL_NAME,
-    ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_ORANGE, ANSI_YELLOW,
-    ANSI_BLUE, ANSI_CYAN, ANSI_GREEN, ANSI_GREY, ANSI_DIM,
-    _SEV_COLOR, _color, _sev_badge,
+    ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_YELLOW,
+    ANSI_CYAN, ANSI_GREEN, ANSI_DIM,
+    _sev_badge,
 )
-from ._report import Finding, VampSecReport, meta_from_args
+from ._report import Finding
 
 # ---------------------------------------------------------------------------
 # Estado global mutable del módulo

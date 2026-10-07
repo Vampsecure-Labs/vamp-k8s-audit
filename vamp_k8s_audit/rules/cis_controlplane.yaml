@@ -1,0 +1,287 @@
+# © VampSecure Studios — VampSecure Labs Security Research Division
+# Checks CIS Kubernetes Benchmark — Control Plane (Secciones 1.x)
+# Estos checks inspeccionan los flags del API server, etcd, scheduler y controller-manager
+# leyendo los manifiestos de pods estáticos en /etc/kubernetes/manifests/ via kubectl
+format: "1.0"
+source: "CIS Kubernetes Benchmark 1.9 — Control Plane Components"
+rules:
+  # ── 1.2.x — API Server ────────────────────────────────────────────────────
+  - id: K8S-CP-001
+    cis: "1.2.1"
+    title: "API Server: anonymous-auth no desactivado"
+    severity: HIGH
+    category: "Control Plane · API Server"
+    description: "El acceso anónimo al API server puede exponer información del clúster."
+    remediation: "Añadir --anonymous-auth=false al manifest del kube-apiserver."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_absent
+    flag: "--anonymous-auth=false"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-002
+    cis: "1.2.6"
+    title: "API Server: --authorization-mode no incluye RBAC"
+    severity: CRITICAL
+    category: "Control Plane · API Server"
+    description: "Sin RBAC como modo de autorización el clúster es inseguro."
+    remediation: "Añadir RBAC a --authorization-mode (ej: Node,RBAC)."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_value_missing
+    flag: "--authorization-mode"
+    required_value: "RBAC"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-003
+    cis: "1.2.7"
+    title: "API Server: --authorization-mode permite AlwaysAllow"
+    severity: CRITICAL
+    category: "Control Plane · API Server"
+    description: "AlwaysAllow en authorization-mode omite todos los controles de acceso."
+    remediation: "Eliminar AlwaysAllow de --authorization-mode."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_value_contains
+    flag: "--authorization-mode"
+    forbidden_value: "AlwaysAllow"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-004
+    cis: "1.2.10"
+    title: "API Server: admission controller EventRateLimit no activado"
+    severity: MEDIUM
+    category: "Control Plane · API Server"
+    description: "Sin EventRateLimit el servidor puede ser saturado con eventos."
+    remediation: "Añadir EventRateLimit a --enable-admission-plugins."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_value_missing
+    flag: "--enable-admission-plugins"
+    required_value: "EventRateLimit"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-005
+    cis: "1.2.11"
+    title: "API Server: admission controller AlwaysAdmit activo"
+    severity: CRITICAL
+    category: "Control Plane · API Server"
+    description: "AlwaysAdmit permite todos los objetos sin validación."
+    remediation: "Eliminar AlwaysAdmit de --enable-admission-plugins."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_value_contains
+    flag: "--enable-admission-plugins"
+    forbidden_value: "AlwaysAdmit"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-006
+    cis: "1.2.13"
+    title: "API Server: PodSecurityPolicy admission controller no activo"
+    severity: MEDIUM
+    category: "Control Plane · API Server"
+    description: "Sin PodSecurityPolicy/PodSecurity no hay restricciones de seguridad de pods a nivel de cluster."
+    remediation: "Activar PodSecurity (K8s ≥1.25) o PodSecurityPolicy (K8s <1.25)."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_value_missing_any
+    flag: "--enable-admission-plugins"
+    required_values: ["PodSecurity", "PodSecurityPolicy"]
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-007
+    cis: "1.2.18"
+    title: "API Server: --insecure-port distinto de 0"
+    severity: CRITICAL
+    category: "Control Plane · API Server"
+    description: "Un puerto HTTP sin TLS expone el API server sin autenticación."
+    remediation: "Añadir --insecure-port=0 al kube-apiserver."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_value_contains
+    flag: "--insecure-port"
+    forbidden_value: "^(?!0$)"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-008
+    cis: "1.2.19"
+    title: "API Server: --secure-port = 0 (HTTPS desactivado)"
+    severity: CRITICAL
+    category: "Control Plane · API Server"
+    description: "Si secure-port es 0, el API server no acepta HTTPS."
+    remediation: "Asegurarse de que --secure-port es distinto de 0 (default: 6443)."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_value_eq
+    flag: "--secure-port"
+    forbidden_value: "0"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-009
+    cis: "1.2.20"
+    title: "API Server: --profiling no desactivado"
+    severity: MEDIUM
+    category: "Control Plane · API Server"
+    description: "El profiling expone información interna del sistema."
+    remediation: "Añadir --profiling=false al kube-apiserver."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_absent
+    flag: "--profiling=false"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-010
+    cis: "1.2.22"
+    title: "API Server: --audit-log-path no configurado"
+    severity: HIGH
+    category: "Control Plane · Auditoría"
+    description: "Sin audit log no hay trazabilidad de acciones en el clúster."
+    remediation: "Configurar --audit-log-path con una ruta válida."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_key_absent
+    flag: "--audit-log-path"
+    filter_container: "kube-apiserver"
+
+  - id: K8S-CP-011
+    cis: "1.2.29"
+    title: "API Server: --tls-cipher-suites no restringido"
+    severity: MEDIUM
+    category: "Control Plane · TLS"
+    description: "Sin restricción de cipher suites pueden usarse algoritmos débiles."
+    remediation: "Configurar --tls-cipher-suites con suites aprobadas (TLS_ECDHE_*)."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_key_absent
+    flag: "--tls-cipher-suites"
+    filter_container: "kube-apiserver"
+
+  # ── 1.3.x — Controller Manager ────────────────────────────────────────────
+  - id: K8S-CP-012
+    cis: "1.3.1"
+    title: "Controller Manager: --terminated-pod-gc-threshold no configurado"
+    severity: LOW
+    category: "Control Plane · Controller Manager"
+    description: "Sin límite de GC los pods terminados se acumulan y consumen recursos."
+    remediation: "Añadir --terminated-pod-gc-threshold=10 al kube-controller-manager."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_key_absent
+    flag: "--terminated-pod-gc-threshold"
+    filter_container: "kube-controller-manager"
+
+  - id: K8S-CP-013
+    cis: "1.3.2"
+    title: "Controller Manager: --profiling no desactivado"
+    severity: MEDIUM
+    category: "Control Plane · Controller Manager"
+    description: "El profiling expone información interna del sistema."
+    remediation: "Añadir --profiling=false al kube-controller-manager."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_absent
+    flag: "--profiling=false"
+    filter_container: "kube-controller-manager"
+
+  - id: K8S-CP-014
+    cis: "1.3.6"
+    title: "Controller Manager: --feature-gates RotateKubeletServerCertificate no activado"
+    severity: MEDIUM
+    category: "Control Plane · Controller Manager"
+    description: "Sin rotación automática los certificados de kubelet caducan."
+    remediation: "Añadir --feature-gates=RotateKubeletServerCertificate=true."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_absent
+    flag: "--feature-gates=RotateKubeletServerCertificate=true"
+    filter_container: "kube-controller-manager"
+
+  # ── 1.4.x — Scheduler ─────────────────────────────────────────────────────
+  - id: K8S-CP-015
+    cis: "1.4.1"
+    title: "Scheduler: --profiling no desactivado"
+    severity: MEDIUM
+    category: "Control Plane · Scheduler"
+    description: "El profiling del scheduler expone información de planificación interna."
+    remediation: "Añadir --profiling=false al kube-scheduler."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_absent
+    flag: "--profiling=false"
+    filter_container: "kube-scheduler"
+
+  # ── 2.x — etcd ────────────────────────────────────────────────────────────
+  - id: K8S-CP-016
+    cis: "2.1"
+    title: "etcd: --cert-file o --key-file no configurados"
+    severity: CRITICAL
+    category: "Control Plane · etcd"
+    description: "Sin TLS en etcd los datos del clúster (incluyendo Secrets) viajan sin cifrar."
+    remediation: "Configurar --cert-file y --key-file en etcd."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_key_absent
+    flag: "--cert-file"
+    filter_container: "etcd"
+
+  - id: K8S-CP-017
+    cis: "2.2"
+    title: "etcd: --client-cert-auth no activado"
+    severity: CRITICAL
+    category: "Control Plane · etcd"
+    description: "Sin autenticación por certificado de cliente cualquiera puede acceder a etcd."
+    remediation: "Añadir --client-cert-auth=true al etcd."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_absent
+    flag: "--client-cert-auth=true"
+    filter_container: "etcd"
+
+  - id: K8S-CP-018
+    cis: "2.6"
+    title: "etcd: --peer-client-cert-auth no activado"
+    severity: HIGH
+    category: "Control Plane · etcd"
+    description: "Sin autenticación entre pares un nodo comprometido puede unirse al clúster etcd."
+    remediation: "Añadir --peer-client-cert-auth=true al etcd."
+    resource_kind: Pod
+    namespace: kube-system
+    foreach_path: "spec.containers"
+    check_path: "command"
+    op: cmd_flag_absent
+    flag: "--peer-client-cert-auth=true"
+    filter_container: "etcd"

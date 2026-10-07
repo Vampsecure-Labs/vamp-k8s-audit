@@ -210,9 +210,12 @@ def _get_nested(obj: Any, path: str) -> "Tuple[bool, Any]":
 
 
 def _eval_op_on_item(
-    op: str, check_path: str, value: Any, item: Any, item_name: "Optional[str]"
+    op: str, check_path: str, value: Any, item: Any, item_name: "Optional[str]",
+    rule: "Optional[dict]" = None,
 ) -> "Optional[Tuple[Optional[str], str]]":
     """Evalúa op en un ítem. Devuelve (item_name, evidence) o None si no hay violación."""
+    if rule is None:
+        rule = {}
     if op == "eq":
         found, actual = _get_nested(item, check_path)
         if found and actual == value:
@@ -265,15 +268,64 @@ def _eval_op_on_item(
                     name = env_item.get("name", "")
                     if "value" in env_item and _SECRET_ENV_RE.search(name):
                         return (item_name, f"env var {name!r} con valor hardcodeado")
+    elif op.startswith("cmd_flag"):
+        found, cmd = _get_nested(item, check_path)
+        if not found or not isinstance(cmd, list):
+            return None
+        flag      = rule.get("flag", "")
+        flag_key  = flag.split("=")[0] if "=" in flag else flag
+        req       = rule.get("required_value", "")
+        forbidden = rule.get("forbidden_value", "")
+        req_any   = rule.get("required_values", [])
+
+        if op == "cmd_flag_absent":
+            # flag (exact string, e.g. "--anonymous-auth=false") no está → hallazgo
+            if flag not in cmd:
+                return (item_name, f"flag {flag!r} ausente")
+        elif op == "cmd_flag_key_absent":
+            # la clave del flag (ej. "--audit-log-path") no aparece en ningún elemento
+            if not any(c == flag_key or c.startswith(flag_key + "=") for c in cmd):
+                return (item_name, f"flag {flag_key!r} no configurado")
+        elif op == "cmd_flag_value_missing":
+            for c in cmd:
+                if c == flag_key or c.startswith(flag_key + "="):
+                    val = c.split("=", 1)[1] if "=" in c else ""
+                    if req not in val.split(","):
+                        return (item_name, f"{flag_key}={val!r} no contiene {req!r}")
+                    return None
+            return (item_name, f"flag {flag_key!r} no configurado (requiere {req!r})")
+        elif op == "cmd_flag_value_contains":
+            for c in cmd:
+                if c.startswith(flag_key + "="):
+                    val = c.split("=", 1)[1]
+                    if forbidden in val.split(","):
+                        return (item_name, f"{flag_key}={val!r} contiene {forbidden!r}")
+                    return None
+        elif op == "cmd_flag_value_eq":
+            for c in cmd:
+                if c.startswith(flag_key + "="):
+                    val = c.split("=", 1)[1]
+                    if val == forbidden:
+                        return (item_name, f"{flag_key}={val!r}")
+                    return None
+        elif op == "cmd_flag_value_missing_any":
+            for c in cmd:
+                if c.startswith(flag_key + "="):
+                    val_parts = c.split("=", 1)[1].split(",")
+                    if any(rv in val_parts for rv in req_any):
+                        return None
+                    return (item_name, f"{flag_key}={c.split('=',1)[1]!r} sin ninguno de {req_any}")
+            return (item_name, f"flag {flag_key!r} no configurado (requiere uno de {req_any})")
     return None
 
 
 def _eval_yaml_rule(rule: dict, resource: dict) -> list:
     """Evalúa una regla YAML contra un recurso. Devuelve lista de (name, evidence)."""
-    op         = rule.get("op", "")
-    check_path = rule.get("check_path", "")
-    value      = rule.get("value")
-    foreach_path = rule.get("foreach_path", "")
+    op               = rule.get("op", "")
+    check_path       = rule.get("check_path", "")
+    value            = rule.get("value")
+    foreach_path     = rule.get("foreach_path", "")
+    filter_container = rule.get("filter_container", "")
     violations: list = []
 
     if foreach_path:
@@ -281,11 +333,13 @@ def _eval_yaml_rule(rule: dict, resource: dict) -> list:
         if found_list and isinstance(items, list):
             for item in items:
                 item_name = item.get("name", "?") if isinstance(item, dict) else "?"
-                viol = _eval_op_on_item(op, check_path, value, item, item_name)
+                if filter_container and item_name != filter_container:
+                    continue
+                viol = _eval_op_on_item(op, check_path, value, item, item_name, rule)
                 if viol is not None:
                     violations.append(viol)
     else:
-        viol = _eval_op_on_item(op, check_path, value, resource, None)
+        viol = _eval_op_on_item(op, check_path, value, resource, None, rule)
         if viol is not None:
             violations.append(viol)
     return violations

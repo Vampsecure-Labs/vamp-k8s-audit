@@ -1,0 +1,171 @@
+# © VampSecure Studios — VampSecure Labs Security Research Division
+# Checks CIS Kubernetes Benchmark — RBAC y Red (Secciones 5.1, 5.3)
+format: "1.0"
+source: "CIS Kubernetes Benchmark 1.9 / NSA K8s Hardening Guide"
+rules:
+  # ── 5.1.1 — cluster-admin ────────────────────────────────────────────────────
+  - id: K8S-RBAC-001
+    cis: "5.1.1"
+    title: "ClusterRoleBinding con cluster-admin asignado"
+    severity: CRITICAL
+    category: "RBAC · Privilegios"
+    description: "El rol cluster-admin otorga acceso total al clúster. Debe minimizarse."
+    remediation: "Revisar y eliminar bindings cluster-admin innecesarios; usar roles granulares."
+    resource_kind: ClusterRoleBinding
+    namespace: cluster
+    check_path: "roleRef.name"
+    op: eq
+    value: "cluster-admin"
+
+  # ── 5.1.2 — Secrets access ───────────────────────────────────────────────────
+  - id: K8S-RBAC-002
+    cis: "5.1.2"
+    title: "ClusterRole con acceso get/list/watch a Secrets"
+    severity: HIGH
+    category: "RBAC · Secrets"
+    description: "El acceso sin restricciones a Secrets puede exponer credenciales."
+    remediation: "Limitar el acceso a Secrets al mínimo necesario por namespace."
+    resource_kind: ClusterRole
+    namespace: cluster
+    foreach_path: "rules"
+    check_path: "resources"
+    op: list_contains
+    value: "secrets"
+
+  # ── 5.1.3 — Wildcard verbs ───────────────────────────────────────────────────
+  - id: K8S-RBAC-003
+    cis: "5.1.3"
+    title: "ClusterRole con verbos wildcard (*)"
+    severity: HIGH
+    category: "RBAC · Privilegios"
+    description: "Los verbos wildcard otorgan todos los permisos posibles sobre los recursos."
+    remediation: "Sustituir * por la lista explícita de verbos necesarios."
+    resource_kind: ClusterRole
+    namespace: cluster
+    foreach_path: "rules"
+    check_path: "verbs"
+    op: list_contains
+    value: "*"
+
+  # ── 5.1.4 — automountServiceAccountToken ─────────────────────────────────────
+  - id: K8S-RBAC-004
+    cis: "5.1.6"
+    title: "ServiceAccount con automountServiceAccountToken no desactivado"
+    severity: MEDIUM
+    category: "RBAC · ServiceAccounts"
+    description: "El token se monta automáticamente y puede ser usado para llamadas a la API."
+    remediation: "Añadir automountServiceAccountToken: false a ServiceAccounts que no llamen a la API."
+    resource_kind: ServiceAccount
+    namespace: all
+    check_path: "automountServiceAccountToken"
+    op: ne
+    value: false
+
+  # ── 5.1.5 — Default SA no debe tener permisos ─────────────────────────────────
+  - id: K8S-RBAC-005
+    cis: "5.1.5"
+    title: "ServiceAccount default con token automontado"
+    severity: MEDIUM
+    category: "RBAC · ServiceAccounts"
+    description: "La SA default no debería tener el token automontado salvo necesidad explícita."
+    remediation: "Añadir automountServiceAccountToken: false a la SA default de cada namespace."
+    resource_kind: ServiceAccount
+    namespace: all
+    check_path: "automountServiceAccountToken"
+    op: ne
+    value: false
+    filter_name: "default"
+
+  # ── 5.3.1 — NetworkPolicy ─────────────────────────────────────────────────────
+  - id: K8S-NET-001
+    cis: "5.3.1"
+    title: "Namespace sin ninguna NetworkPolicy"
+    severity: HIGH
+    category: "Red · NetworkPolicy"
+    description: "Sin NetworkPolicies todo el tráfico este-oeste está permitido."
+    remediation: "Crear al menos una NetworkPolicy de deny-all por namespace y luego añadir excepciones."
+    resource_kind: NetworkPolicy
+    namespace: all
+    op: namespace_empty
+
+  # ── 5.3.2 — Ingress con TLS ──────────────────────────────────────────────────
+  - id: K8S-NET-002
+    cis: "5.3.2"
+    title: "Ingress sin TLS configurado"
+    severity: HIGH
+    category: "Red · Ingress"
+    description: "El tráfico HTTP sin cifrar puede ser interceptado."
+    remediation: "Añadir tls[] a cada Ingress con un secreto de certificado válido."
+    resource_kind: Ingress
+    namespace: all
+    check_path: "spec.tls"
+    op: absent
+
+  # ── Kubernetes Dashboard expuesto ─────────────────────────────────────────────
+  - id: K8S-NET-003
+    cis: "5.3.3"
+    title: "Kubernetes Dashboard expuesto como NodePort o LoadBalancer"
+    severity: HIGH
+    category: "Red · Exposición"
+    description: "El Dashboard expuesto públicamente es un vector de ataque habitual."
+    remediation: "Usar type: ClusterIP + kubectl port-forward para acceder al Dashboard."
+    resource_kind: Service
+    namespace: kubernetes-dashboard
+    check_path: "spec.type"
+    op: in
+    value: ["NodePort", "LoadBalancer"]
+
+  # ── Secrets en variables de entorno ──────────────────────────────────────────
+  - id: K8S-SEC-001
+    cis: "5.4.1"
+    title: "Contenedor con secretos en variables de entorno hardcodeadas"
+    severity: HIGH
+    category: "Secrets · Exposición"
+    description: "Los secretos en env{value:...} se almacenan en texto claro en etcd."
+    remediation: "Usar env[].valueFrom.secretKeyRef en lugar de env[].value para datos sensibles."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "env"
+    op: env_has_secret_value
+
+  # ── Image tag latest ─────────────────────────────────────────────────────────
+  - id: K8S-IMG-001
+    cis: "5.5.1"
+    title: "Contenedor usando imagen con tag :latest o sin tag"
+    severity: MEDIUM
+    category: "Imágenes · Inmutabilidad"
+    description: "El tag :latest no garantiza inmutabilidad; puede desplegar versiones no esperadas."
+    remediation: "Usar tags de versión exacta o digest SHA256."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "image"
+    op: ends_with_latest
+
+  # ── Registry no aprobado ──────────────────────────────────────────────────────
+  - id: K8S-IMG-002
+    cis: "5.5.2"
+    title: "Contenedor usando imagen de registro no oficial"
+    severity: MEDIUM
+    category: "Imágenes · Registry"
+    description: "Las imágenes de registros no controlados pueden contener malware."
+    remediation: "Usar solo imágenes de registros aprobados y verificados."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "image"
+    op: from_unofficial_registry
+
+  # ── Recursos sin labels ───────────────────────────────────────────────────────
+  - id: K8S-OPS-001
+    cis: "5.6.1"
+    title: "Deployment sin label app o component"
+    severity: LOW
+    category: "Operaciones · Etiquetado"
+    description: "Los labels facilitan la selección, auditoría y aplicación de políticas."
+    remediation: "Añadir labels app: y component: a todos los Deployments."
+    resource_kind: Deployment
+    namespace: all
+    check_path: "metadata.labels.app"
+    op: absent

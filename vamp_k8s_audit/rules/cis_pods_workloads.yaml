@@ -1,0 +1,202 @@
+# © VampSecure Studios — VampSecure Labs Security Research Division
+# Checks CIS Kubernetes Benchmark — Pods y Workloads (Secciones 5.2, 5.4)
+format: "1.0"
+source: "CIS Kubernetes Benchmark 1.9 / NSA K8s Hardening Guide"
+rules:
+  # ── 5.2.1 — Contenedores privilegiados ──────────────────────────────────────
+  - id: K8S-POD-001
+    cis: "5.2.1"
+    title: "Contenedor con securityContext.privileged=true"
+    severity: CRITICAL
+    category: "Pods · Privilege Escalation"
+    description: "Los contenedores privilegiados tienen acceso casi total al nodo host."
+    remediation: "Eliminar privileged: true de todos los contenedores que no lo requieran estrictamente."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "securityContext.privileged"
+    op: eq
+    value: true
+
+  - id: K8S-POD-001B
+    cis: "5.2.1"
+    title: "InitContainer con securityContext.privileged=true"
+    severity: CRITICAL
+    category: "Pods · Privilege Escalation"
+    description: "Los initContainers privilegiados tienen acceso casi total al nodo."
+    remediation: "Eliminar privileged: true de todos los initContainers."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.initContainers"
+    check_path: "securityContext.privileged"
+    op: eq
+    value: true
+
+  # ── 5.2.2 — hostPID ──────────────────────────────────────────────────────────
+  - id: K8S-POD-002
+    cis: "5.2.2"
+    title: "Pod con hostPID=true"
+    severity: HIGH
+    category: "Pods · Host Namespaces"
+    description: "hostPID permite acceder a los procesos del nodo host."
+    remediation: "Eliminar hostPID: true salvo herramientas de depuración aprobadas."
+    resource_kind: Pod
+    namespace: all
+    check_path: "spec.hostPID"
+    op: eq
+    value: true
+
+  # ── 5.2.3 — hostIPC ──────────────────────────────────────────────────────────
+  - id: K8S-POD-003
+    cis: "5.2.3"
+    title: "Pod con hostIPC=true"
+    severity: HIGH
+    category: "Pods · Host Namespaces"
+    description: "hostIPC da acceso al espacio de IPC del nodo."
+    remediation: "Eliminar hostIPC: true."
+    resource_kind: Pod
+    namespace: all
+    check_path: "spec.hostIPC"
+    op: eq
+    value: true
+
+  # ── 5.2.4 — hostNetwork ───────────────────────────────────────────────────────
+  - id: K8S-POD-004
+    cis: "5.2.4"
+    title: "Pod con hostNetwork=true"
+    severity: HIGH
+    category: "Pods · Host Namespaces"
+    description: "hostNetwork expone la pila de red del nodo al pod."
+    remediation: "Eliminar hostNetwork: true salvo DaemonSets de red aprobados."
+    resource_kind: Pod
+    namespace: all
+    check_path: "spec.hostNetwork"
+    op: eq
+    value: true
+
+  # ── 5.2.5 — allowPrivilegeEscalation ─────────────────────────────────────────
+  - id: K8S-POD-005
+    cis: "5.2.5"
+    title: "Contenedor sin allowPrivilegeEscalation=false"
+    severity: HIGH
+    category: "Pods · Privilege Escalation"
+    description: "Sin esta restricción un proceso puede elevar privilegios vía setuid/sudo."
+    remediation: "Añadir securityContext.allowPrivilegeEscalation: false a todos los contenedores."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "securityContext.allowPrivilegeEscalation"
+    op: ne
+    value: false
+
+  # ── 5.2.6 — runAsRoot ─────────────────────────────────────────────────────────
+  - id: K8S-POD-006
+    cis: "5.2.6"
+    title: "Contenedor ejecutándose como root (runAsNonRoot no configurado)"
+    severity: HIGH
+    category: "Pods · Privilege Escalation"
+    description: "Ejecutar como root amplía el impacto de una escapada de contenedor."
+    remediation: "Añadir securityContext.runAsNonRoot: true o runAsUser > 0."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "securityContext.runAsNonRoot"
+    op: ne
+    value: true
+
+  # ── 5.2.7 — readOnlyRootFilesystem ───────────────────────────────────────────
+  - id: K8S-POD-007
+    cis: "5.2.7"
+    title: "Contenedor sin readOnlyRootFilesystem=true"
+    severity: MEDIUM
+    category: "Pods · Filesystem"
+    description: "Un sistema de ficheros raíz escribible facilita la persistencia del atacante."
+    remediation: "Añadir securityContext.readOnlyRootFilesystem: true."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "securityContext.readOnlyRootFilesystem"
+    op: ne
+    value: true
+
+  # ── 5.2.8 — capabilities ─────────────────────────────────────────────────────
+  - id: K8S-POD-008
+    cis: "5.2.8"
+    title: "Contenedor sin drop de capabilities"
+    severity: HIGH
+    category: "Pods · Capabilities"
+    description: "Las capabilities sin restricciones amplían la superficie de ataque."
+    remediation: "Añadir securityContext.capabilities.drop: ['ALL'] y añadir solo las mínimas necesarias."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "securityContext.capabilities.drop"
+    op: absent
+
+  # ── 5.4.1 — Recursos (CPU/Memory limits) ─────────────────────────────────────
+  - id: K8S-WRK-001
+    cis: "5.4.1"
+    title: "Contenedor sin limits de CPU"
+    severity: MEDIUM
+    category: "Workloads · Resource Limits"
+    description: "Sin límites de CPU un pod puede causar contención de recursos en el nodo."
+    remediation: "Definir resources.limits.cpu en todos los contenedores."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "resources.limits.cpu"
+    op: absent
+
+  - id: K8S-WRK-002
+    cis: "5.4.1"
+    title: "Contenedor sin limits de memoria"
+    severity: MEDIUM
+    category: "Workloads · Resource Limits"
+    description: "Sin límites de memoria un pod puede agotar la RAM del nodo."
+    remediation: "Definir resources.limits.memory en todos los contenedores."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "resources.limits.memory"
+    op: absent
+
+  # ── Liveness/Readiness probes ─────────────────────────────────────────────────
+  - id: K8S-WRK-003
+    cis: "5.4.2"
+    title: "Contenedor sin livenessProbe"
+    severity: LOW
+    category: "Workloads · Health"
+    description: "Sin livenessProbe Kubernetes no puede detectar y reiniciar pods bloqueados."
+    remediation: "Definir livenessProbe en todos los contenedores de aplicación."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "livenessProbe"
+    op: absent
+
+  - id: K8S-WRK-004
+    cis: "5.4.2"
+    title: "Contenedor sin readinessProbe"
+    severity: LOW
+    category: "Workloads · Health"
+    description: "Sin readinessProbe el pod puede recibir tráfico antes de estar listo."
+    remediation: "Definir readinessProbe en todos los contenedores de aplicación."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "readinessProbe"
+    op: absent
+
+  # ── HostPath volumes ──────────────────────────────────────────────────────────
+  - id: K8S-WRK-005
+    cis: "5.4.3"
+    title: "Pod con volumen hostPath (acceso al nodo)"
+    severity: HIGH
+    category: "Pods · Volumes"
+    description: "Los volúmenes hostPath dan acceso directo al sistema de ficheros del nodo."
+    remediation: "Reemplazar hostPath por PersistentVolumeClaims u otros tipos de volumen."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.volumes"
+    check_path: "hostPath"
+    op: present

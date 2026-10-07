@@ -163,6 +163,135 @@ def _verificar_kubectl_disponible() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Motor de reglas YAML
+# ---------------------------------------------------------------------------
+
+def _load_yaml_checks() -> list:
+    try:
+        import yaml as _yaml
+    except ImportError:
+        return []
+    rules_dir = Path(__file__).parent / "rules"
+    if not rules_dir.exists():
+        return []
+    loaded: list = []
+    for yf in sorted(rules_dir.glob("*.yaml")):
+        try:
+            data = _yaml.safe_load(yf.read_text(encoding="utf-8")) or {}
+            for r in data.get("rules", []):
+                if r.get("id") and r.get("op"):
+                    loaded.append(r)
+        except Exception:
+            pass
+    return loaded
+
+
+_YAML_CHECKS: list = _load_yaml_checks()
+
+_OFFICIAL_REGISTRIES = frozenset({
+    "docker.io", "gcr.io", "ghcr.io", "registry.k8s.io",
+    "k8s.gcr.io", "quay.io", "mcr.microsoft.com",
+})
+
+_SECRET_ENV_RE = re.compile(
+    r"(?i)(password|passwd|secret|token|key|api_key|apikey|"
+    r"credential|cred|auth|private|jwt|bearer)",
+)
+
+
+def _get_nested(obj: Any, path: str) -> "Tuple[bool, Any]":
+    """Navega un dict por ruta de puntos. Devuelve (found, value)."""
+    cur = obj
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False, None
+        cur = cur[part]
+    return True, cur
+
+
+def _eval_op_on_item(
+    op: str, check_path: str, value: Any, item: Any, item_name: "Optional[str]"
+) -> "Optional[Tuple[Optional[str], str]]":
+    """Evalúa op en un ítem. Devuelve (item_name, evidence) o None si no hay violación."""
+    if op == "eq":
+        found, actual = _get_nested(item, check_path)
+        if found and actual == value:
+            return (item_name, f"{check_path} = {actual!r}")
+    elif op == "ne":
+        found, actual = _get_nested(item, check_path)
+        if not found:
+            return (item_name, f"{check_path} ausente")
+        if actual != value:
+            return (item_name, f"{check_path} = {actual!r} (esperado: {value!r})")
+    elif op == "present":
+        found, _ = _get_nested(item, check_path)
+        if found:
+            return (item_name, f"{check_path} presente")
+    elif op == "absent":
+        found, _ = _get_nested(item, check_path)
+        if not found:
+            return (item_name, f"{check_path} no definido")
+    elif op == "list_contains":
+        found, lst = _get_nested(item, check_path)
+        if found and isinstance(lst, list) and value in lst:
+            return (item_name, f"{check_path} contiene {value!r}")
+    elif op == "in":
+        found, actual = _get_nested(item, check_path)
+        if found and isinstance(value, list) and actual in value:
+            return (item_name, f"{check_path} = {actual!r}")
+    elif op == "ends_with_latest":
+        found, image = _get_nested(item, check_path)
+        if found and isinstance(image, str):
+            img_part = image.split("/")[-1]
+            if image.endswith(":latest") or ":" not in img_part:
+                return (item_name, f"image = {image!r}")
+    elif op == "from_unofficial_registry":
+        found, image = _get_nested(item, check_path)
+        if found and isinstance(image, str):
+            parts = image.split("/")
+            if len(parts) >= 3:
+                registry = parts[0]
+            elif len(parts) == 2 and ("." in parts[0] or ":" in parts[0]):
+                registry = parts[0]
+            else:
+                registry = "docker.io"
+            if registry not in _OFFICIAL_REGISTRIES:
+                return (item_name, f"image {image!r} (registry {registry!r})")
+    elif op == "env_has_secret_value":
+        found, env_list = _get_nested(item, check_path)
+        if found and isinstance(env_list, list):
+            for env_item in env_list:
+                if isinstance(env_item, dict):
+                    name = env_item.get("name", "")
+                    if "value" in env_item and _SECRET_ENV_RE.search(name):
+                        return (item_name, f"env var {name!r} con valor hardcodeado")
+    return None
+
+
+def _eval_yaml_rule(rule: dict, resource: dict) -> list:
+    """Evalúa una regla YAML contra un recurso. Devuelve lista de (name, evidence)."""
+    op         = rule.get("op", "")
+    check_path = rule.get("check_path", "")
+    value      = rule.get("value")
+    foreach_path = rule.get("foreach_path", "")
+    violations: list = []
+
+    if foreach_path:
+        found_list, items = _get_nested(resource, foreach_path)
+        if found_list and isinstance(items, list):
+            for item in items:
+                item_name = item.get("name", "?") if isinstance(item, dict) else "?"
+                viol = _eval_op_on_item(op, check_path, value, item, item_name)
+                if viol is not None:
+                    violations.append(viol)
+    else:
+        viol = _eval_op_on_item(op, check_path, value, resource, None)
+        if viol is not None:
+            violations.append(viol)
+    return violations
+
+
+# ---------------------------------------------------------------------------
 # Clase principal del auditor
 # ---------------------------------------------------------------------------
 
@@ -2291,6 +2420,168 @@ class K8SAuditor:
                     ))
                     break
 
+    # ── Fase 11: Reglas YAML CIS ──────────────────────────────────────────
+
+    def fase_yaml_rules(self) -> None:
+        """Evalúa reglas YAML CIS contra todos los recursos del clúster."""
+        if not _YAML_CHECKS:
+            _log_warn("No hay reglas YAML disponibles (¿falta pyyaml?)")
+            return
+        _log_phase(11, f"Reglas YAML CIS ({len(_YAML_CHECKS)} checks)")
+
+        resource_cache: dict = {}
+
+        def fetch(kind: str, ns_scope: str) -> list:
+            key = (kind, ns_scope)
+            if key not in resource_cache:
+                if ns_scope == "cluster":
+                    data = _kubectl(["get", kind, "-o", "json"])
+                else:
+                    data = _kubectl(["get", kind, "--all-namespaces", "-o", "json"])
+                resource_cache[key] = data.get("items", []) if data else []
+            return resource_cache[key]
+
+        rule_count = 0
+        finding_count = 0
+
+        for rule in _YAML_CHECKS:
+            rule_id      = rule["id"]
+            kind         = rule.get("resource_kind", "Pod")
+            ns_scope     = rule.get("namespace", "all")
+            op           = rule.get("op", "")
+            title        = rule.get("title", rule_id)
+            severity     = rule.get("severity", "MEDIUM")
+            category     = rule.get("category", "")
+            description  = rule.get("description", "")
+            remediation  = rule.get("remediation", "")
+            filter_name  = rule.get("filter_name")
+            cis          = rule.get("cis", "")
+            rule_count  += 1
+            resources    = fetch(kind, ns_scope)
+
+            # namespace_empty: comprueba si hay algún recurso de este tipo en cada ns
+            if op == "namespace_empty":
+                ns_data = _kubectl(["get", "namespaces", "-o", "json"])
+                all_ns: set = set()
+                if ns_data:
+                    for ns_item in ns_data.get("items", []):
+                        all_ns.add(ns_item.get("metadata", {}).get("name", ""))
+                ns_with_res: set = set()
+                for res in resources:
+                    ns = res.get("metadata", {}).get("namespace", "")
+                    if ns:
+                        ns_with_res.add(ns)
+                skip = {"kube-system", "kube-public", "kube-node-lease"}
+                empty_ns = all_ns - ns_with_res - skip
+                if empty_ns:
+                    for ns in sorted(empty_ns):
+                        safe_id = re.sub(r"[^a-zA-Z0-9]", "", ns)
+                        self._add(Finding(
+                            id          = f"{rule_id}-{safe_id}",
+                            title       = title,
+                            severity    = severity,
+                            description = description,
+                            evidence    = f"Namespace {ns!r} sin {kind}",
+                            affected    = f"namespace/{ns}",
+                            remediation = remediation,
+                            tags        = ["yaml-cis", category],
+                            references  = [f"CIS K8s {cis}"] if cis else [],
+                        ))
+                        finding_count += 1
+                else:
+                    _log_clean(f"{rule_id}: OK")
+                continue
+
+            flagged = False
+            for resource in resources:
+                res_name = resource.get("metadata", {}).get("name", "?")
+                res_ns   = resource.get("metadata", {}).get("namespace", "")
+                if filter_name and res_name != filter_name:
+                    continue
+                violations = _eval_yaml_rule(rule, resource)
+                if not violations:
+                    continue
+                flagged = True
+                affected = f"{res_ns}/{kind}/{res_name}" if res_ns else f"{kind}/{res_name}"
+                evidence_lines = []
+                for item_name, ev_str in violations[:5]:
+                    evidence_lines.append(f"  · {item_name + ': ' if item_name else ''}{ev_str}")
+                if len(violations) > 5:
+                    evidence_lines.append(f"  · ... y {len(violations) - 5} más")
+                safe_id = re.sub(r"[^a-zA-Z0-9]", "", res_name)[:20]
+                self._add(Finding(
+                    id          = f"{rule_id}-{safe_id}",
+                    title       = title,
+                    severity    = severity,
+                    description = description,
+                    evidence    = "\n".join(evidence_lines),
+                    affected    = affected,
+                    remediation = remediation,
+                    tags        = ["yaml-cis", category],
+                    references  = [f"CIS K8s {cis}"] if cis else [],
+                ))
+                finding_count += 1
+
+            if not flagged:
+                _log_clean(f"{rule_id}: OK")
+
+        _log_info(
+            f"Reglas YAML: {rule_count} evaluadas → {finding_count} hallazgo(s)"
+        )
+
+    # ── Fase 12: kube-bench externo ───────────────────────────────────────
+
+    def run_kubebench(self) -> None:
+        """Ejecuta kube-bench si está disponible e importa sus hallazgos."""
+        _log_phase(12, "kube-bench (CIS Kubernetes Benchmark externo)")
+        try:
+            result = subprocess.run(
+                ["kube-bench", "--json"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode not in (0, 1):
+                _log_warn(f"kube-bench terminó con código {result.returncode}")
+                return
+            data = json.loads(result.stdout)
+        except FileNotFoundError:
+            _log_warn("kube-bench no encontrado en PATH — saltando fase 12")
+            return
+        except subprocess.TimeoutExpired:
+            _log_warn("kube-bench timeout (120s) — saltando")
+            return
+        except json.JSONDecodeError:
+            _log_warn("kube-bench: salida JSON no parseable")
+            return
+
+        kb_count = 0
+        sections = data if isinstance(data, list) else [data]
+        for section in sections:
+            node_type = section.get("node_type", "cluster")
+            for test_group in section.get("tests", []):
+                for test in test_group.get("results", []):
+                    if test.get("status", "") != "FAIL":
+                        continue
+                    test_num  = test.get("test_number", "?")
+                    test_desc = test.get("test_desc", "")
+                    remed     = test.get("remediation", "")
+                    scored    = test.get("scored", True)
+                    severity  = "HIGH" if scored else "MEDIUM"
+                    safe_id   = re.sub(r"[^a-zA-Z0-9]", "", test_num)
+                    self._add(Finding(
+                        id          = f"KB-{safe_id}",
+                        title       = f"[kube-bench] {test_desc}",
+                        severity    = severity,
+                        description = f"CIS K8s Benchmark check {test_num} fallido.",
+                        evidence    = test.get("actual_value", ""),
+                        affected    = node_type,
+                        remediation = remed,
+                        tags        = ["kube-bench", "cis"],
+                        references  = [f"CIS K8s {test_num}"],
+                    ))
+                    kb_count += 1
+
+        _log_info(f"kube-bench: {kb_count} hallazgo(s) importados")
+
     # ── Ejecución completa ─────────────────────────────────────────────────
 
     def run(self) -> int:
@@ -2320,6 +2611,9 @@ class K8SAuditor:
 
         if getattr(self, "audit_control_plane", False):
             self.fase10_control_plane_cis()
+
+        self.fase_yaml_rules()
+        self.run_kubebench()
 
         return self._calcular_exit_code()
 

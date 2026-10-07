@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vamp-k8s-audit"
-version = "2.2.0"
-description = "Kubernetes cluster security auditor for authorized assessments, with delta scan"
+version = "3.0.0"
+description = "Kubernetes cluster security auditor — motor YAML extensible CIS K8s Benchmark, kube-bench wrapper, delta scan"
 readme = "README.md"
 license = { text = "AGPL-3.0-only" }
 requires-python = ">=3.9"
@@ -20,7 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Security",
 ]
-dependencies = []
+dependencies = ["pyyaml>=6.0"]
 
 
 [project.scripts]
@@ -33,3 +33,6 @@ Repository = "https://github.com/Vampsecure-Labs/vamp-k8s-audit"
 [tool.setuptools]
 packages = ["vamp_k8s_audit"]
 py-modules = ["vampsec_report"]
+
+[tool.setuptools.package-data]
+vamp_k8s_audit = ["rules/*.yaml"]

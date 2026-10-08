@@ -1,0 +1,190 @@
+# © VampSecure Studios — VampSecure Labs Security Research Division
+# Checks: Admission Webhooks, Pod Security adicional, Storage, Namespace Policies
+# Secciones CIS K8s 5.7 (seccomp), 6.x (admission), storage y namespace policies
+format: "1.0"
+source: "CIS Kubernetes Benchmark 1.9 / NSA K8s Hardening Guide / VampSecure Labs"
+rules:
+  # ── Admission Webhooks — ValidatingWebhookConfiguration ───────────────────
+  - id: K8S-ADM-001
+    cis: "5.7.3"
+    title: "ValidatingWebhook con failurePolicy:Ignore — errores de validación silenciados"
+    severity: HIGH
+    category: "Admission · Webhooks"
+    description: "failurePolicy:Ignore hace que el webhook no bloquee las peticiones si el servidor falla. Un atacante puede provocar que el validador no responda para saltarse las políticas."
+    remediation: "Cambiar failurePolicy a 'Fail' en webhooks de seguridad críticos; reservar Ignore solo para webhooks no relacionados con seguridad."
+    resource_kind: ValidatingWebhookConfiguration
+    namespace: cluster
+    foreach_path: "webhooks"
+    check_path: "failurePolicy"
+    op: eq
+    value: "Ignore"
+
+  - id: K8S-ADM-002
+    cis: "5.7.3"
+    title: "MutatingWebhook con failurePolicy:Ignore — mutaciones de seguridad evitables"
+    severity: HIGH
+    category: "Admission · Webhooks"
+    description: "failurePolicy:Ignore permite que el recurso se cree aunque el webhook mutante no responda, omitiendo inyecciones de política de seguridad."
+    remediation: "Cambiar failurePolicy a 'Fail' en webhooks de mutación que apliquen controles de seguridad."
+    resource_kind: MutatingWebhookConfiguration
+    namespace: cluster
+    foreach_path: "webhooks"
+    check_path: "failurePolicy"
+    op: eq
+    value: "Ignore"
+
+  - id: K8S-ADM-003
+    cis: ""
+    title: "ValidatingWebhook sin timeoutSeconds — timeout por defecto puede ser insuficiente"
+    severity: LOW
+    category: "Admission · Webhooks"
+    description: "Sin timeoutSeconds explícito se aplica el defecto del clúster (10 s). En clústeres con latencia alta o backends lentos puede provocar fallos silenciosos."
+    remediation: "Definir timeoutSeconds explícitamente (5–30 s) en cada webhook de validación."
+    resource_kind: ValidatingWebhookConfiguration
+    namespace: cluster
+    foreach_path: "webhooks"
+    check_path: "timeoutSeconds"
+    op: absent
+
+  - id: K8S-ADM-004
+    cis: ""
+    title: "MutatingWebhook con sideEffects Some/Unknown — efectos secundarios no declarados"
+    severity: MEDIUM
+    category: "Admission · Webhooks"
+    description: "sideEffects:Some o Unknown indica que el webhook puede modificar estado externo al procesar dry-run, lo que puede corromper datos o eludir auditorías."
+    remediation: "Declarar sideEffects:None (sin efectos) o NoneOnDryRun; revisar el webhook para eliminar efectos secundarios."
+    resource_kind: MutatingWebhookConfiguration
+    namespace: cluster
+    foreach_path: "webhooks"
+    check_path: "sideEffects"
+    op: in
+    value: ["Some", "Unknown"]
+
+  # ── Pod Security — seccomp, capacidades, UID root ─────────────────────────
+  - id: K8S-ADM-005
+    cis: "5.7.2"
+    title: "Pod sin seccompProfile definido — perfil seccomp no configurado"
+    severity: MEDIUM
+    category: "Pods · Seccomp"
+    description: "Sin seccompProfile el kernel no filtra las syscalls del pod; un compromiso del proceso permite llamadas al kernel no restringidas."
+    remediation: "Añadir spec.securityContext.seccompProfile.type: RuntimeDefault (o un perfil personalizado) a todos los pods."
+    resource_kind: Pod
+    namespace: all
+    check_path: "spec.securityContext.seccompProfile"
+    op: absent
+
+  - id: K8S-ADM-006
+    cis: "5.2.6"
+    title: "Contenedor con runAsUser:0 — ejecución explícita como root (UID 0)"
+    severity: HIGH
+    category: "Pods · Privilege Escalation"
+    description: "securityContext.runAsUser:0 ejecuta el proceso del contenedor como el usuario root del sistema; si el proceso es comprometido tiene privilegios de root sobre el host."
+    remediation: "Eliminar runAsUser:0; usar un UID no privilegiado y activar runAsNonRoot:true."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "securityContext.runAsUser"
+    op: eq
+    value: 0
+
+  - id: K8S-ADM-006B
+    cis: "5.2.6"
+    title: "InitContainer con runAsUser:0 — ejecución explícita como root (UID 0)"
+    severity: HIGH
+    category: "Pods · Privilege Escalation"
+    description: "securityContext.runAsUser:0 en initContainers ejecuta el proceso de inicialización como root; puede usarse para preparar escalada de privilegios."
+    remediation: "Eliminar runAsUser:0 de initContainers; usar un UID no privilegiado."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.initContainers"
+    check_path: "securityContext.runAsUser"
+    op: eq
+    value: 0
+
+  - id: K8S-ADM-007
+    cis: "5.2.9"
+    title: "Contenedor con capabilities.add — añade capacidades Linux al contenedor"
+    severity: HIGH
+    category: "Pods · Linux Capabilities"
+    description: "capabilities.add otorga capacidades Linux adicionales (NET_ADMIN, SYS_PTRACE…) que amplían los privilegios por encima del conjunto por defecto."
+    remediation: "Eliminar capabilities.add; usar solo las capacidades estrictamente necesarias y acompañar con capabilities.drop: [ALL]."
+    resource_kind: Pod
+    namespace: all
+    foreach_path: "spec.containers"
+    check_path: "securityContext.capabilities.add"
+    op: present
+
+  - id: K8S-ADM-008
+    cis: "5.2.1"
+    title: "PodSecurityPolicy con spec.privileged:true — PSP permite contenedores privilegiados"
+    severity: HIGH
+    category: "Admission · PodSecurityPolicy"
+    description: "PodSecurityPolicy con privileged:true permite que cualquier pod de los selectores de la política ejecute contenedores con acceso casi total al host."
+    remediation: "Cambiar privileged:false en la PSP o eliminarla y migrar a Pod Security Admission (PSA)."
+    resource_kind: PodSecurityPolicy
+    namespace: cluster
+    check_path: "spec.privileged"
+    op: eq
+    value: true
+
+  # ── Storage — políticas de reclamación y recursos ─────────────────────────
+  - id: K8S-ADM-009
+    cis: ""
+    title: "PersistentVolume con reclaimPolicy:Delete — datos eliminados al liberar el PV"
+    severity: MEDIUM
+    category: "Storage · PersistentVolumes"
+    description: "reclaimPolicy:Delete elimina automáticamente el volumen subyacente cuando el PVC asociado se borra; puede suponer pérdida de datos irreversible en producción."
+    remediation: "Usar reclaimPolicy:Retain para PVs de producción; hacer backups regulares antes de borrar PVCs."
+    resource_kind: PersistentVolume
+    namespace: cluster
+    check_path: "spec.persistentVolumeReclaimPolicy"
+    op: eq
+    value: "Delete"
+
+  - id: K8S-ADM-010
+    cis: ""
+    title: "StorageClass con reclaimPolicy:Delete — volúmenes dinámicos eliminados al liberar"
+    severity: MEDIUM
+    category: "Storage · StorageClasses"
+    description: "StorageClasses con reclaimPolicy:Delete (el defecto en la mayoría de proveedores) elimina el volumen subyacente al borrar el PVC; riesgo de pérdida de datos."
+    remediation: "Para StorageClasses de producción, definir reclaimPolicy:Retain y gestionar el ciclo de vida del volumen manualmente."
+    resource_kind: StorageClass
+    namespace: cluster
+    check_path: "reclaimPolicy"
+    op: eq
+    value: "Delete"
+
+  - id: K8S-ADM-011
+    cis: ""
+    title: "StorageClass sin allowVolumeExpansion — no se pueden ampliar volúmenes"
+    severity: LOW
+    category: "Storage · StorageClasses"
+    description: "Sin allowVolumeExpansion:true los PVCs de esta clase no pueden crecer en línea; obliga a migraciones de datos disruptivas cuando el almacenamiento se llena."
+    remediation: "Añadir allowVolumeExpansion:true a StorageClasses que soporten la expansión en el proveedor subyacente."
+    resource_kind: StorageClass
+    namespace: cluster
+    check_path: "allowVolumeExpansion"
+    op: absent
+
+  # ── Namespace Policies — ResourceQuota y LimitRange ───────────────────────
+  - id: K8S-ADM-012
+    cis: "5.7.1"
+    title: "Namespace sin ResourceQuota — sin límites de recursos por namespace"
+    severity: MEDIUM
+    category: "Namespace · ResourceQuotas"
+    description: "Sin ResourceQuota un namespace puede consumir todos los recursos del clúster, afectando a otros workloads y facilitando ataques de denegación de servicio interno."
+    remediation: "Crear un ResourceQuota por namespace con límites de CPU, memoria y número de objetos."
+    resource_kind: ResourceQuota
+    namespace: all
+    op: namespace_empty
+
+  - id: K8S-ADM-013
+    cis: ""
+    title: "Namespace sin LimitRange — pods sin límites por defecto"
+    severity: LOW
+    category: "Namespace · LimitRanges"
+    description: "Sin LimitRange los pods que no especifiquen resources.limits pueden crecer sin restricción; también impide que el scheduler tome decisiones de calidad de servicio óptimas."
+    remediation: "Crear un LimitRange por namespace con límites por defecto razonables para CPU y memoria."
+    resource_kind: LimitRange
+    namespace: all
+    op: namespace_empty

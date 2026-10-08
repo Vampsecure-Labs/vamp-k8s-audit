@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vamp-k8s-audit"
-version = "3.0.0"
-description = "Kubernetes cluster security auditor — motor YAML extensible CIS K8s Benchmark, kube-bench wrapper, delta scan"
+version = "3.1.0"
+description = "Kubernetes cluster security auditor — motor YAML extensible CIS K8s Benchmark, 58 checks (admission webhooks, storage, namespace policies, pods, RBAC), kube-bench wrapper, delta scan"
 readme = "README.md"
 license = { text = "AGPL-3.0-only" }
 requires-python = ">=3.9"

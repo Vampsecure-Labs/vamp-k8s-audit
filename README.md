@@ -192,6 +192,84 @@ rules:
 
 ---
 
+## Sample Output
+
+```
+$ python3 vamp_k8s_audit.py --context lab-cluster --verbose
+
+╔══════════════════════════════════════════════════════════╗
+║       vamp-k8s-audit v3.1.0 — VampSecure Labs            ║
+║  Context: lab-cluster   Namespace: all                   ║
+╚══════════════════════════════════════════════════════════╝
+
+[Phase 1] Cluster Context ...
+  K8S-001  CRITICAL  Anonymous API access enabled — unauthenticated requests accepted
+  K8S-003  HIGH      Node version skew: control-plane v1.27.4, worker v1.25.9
+
+[Phase 2] RBAC ...
+  K8S-010  CRITICAL  ServiceAccount default/api-service bound to cluster-admin
+  K8S-017  HIGH      ClusterRole app-reader uses wildcard (*) on resources
+
+[Phase 3] Pod Security ...
+  K8S-031  CRITICAL  Pod monitoring/prometheus: privileged=true
+  K8S-038  HIGH      Pod api/backend: allowPrivilegeEscalation not set to false
+  K8S-045  MEDIUM    Pods in namespace api missing CPU/memory limits (8 pods)
+
+[Phase 4] Network ...
+  K8S-062  HIGH      Namespace frontend: no NetworkPolicy — unrestricted pod egress
+  K8S-068  MEDIUM    Ingress api/public-ingress exposes HTTP without TLS redirect
+
+[Phase 5] Secrets ...
+  K8S-081  HIGH      Pod api/backend: DB_PASSWORD exposed via plain env var (not secretKeyRef)
+
+┌──────────────────────────────────────────────────────────┐
+│  CRITICAL  3   HIGH  5   MEDIUM  3   LOW  1   INFO  2    │
+└──────────────────────────────────────────────────────────┘
+Exit code: 2 — CRITICAL findings detected
+```
+
+---
+
+## Why vamp-k8s-audit vs. kube-bench · Kubescape · Trivy (k8s mode)
+
+| Feature | vamp-k8s-audit | kube-bench | Kubescape | Trivy k8s |
+|---------|:---:|:---:|:---:|:---:|
+| RBAC misconfiguration analysis | ✅ | ❌ | ✅ | ⚠️ partial |
+| Pod Security context checks | ✅ | ✅ | ✅ | ✅ |
+| Secrets in env vars / ConfigMaps | ✅ | ❌ | ⚠️ partial | ❌ |
+| YAML-extensible rules engine | ✅ | ❌ | ❌ | ❌ |
+| `--delta FILE` diff between two scans | ✅ | ❌ | ❌ | ❌ |
+| kube-bench wrapper integration | ✅ | N/A | ❌ | ❌ |
+| CI/CD exit codes (0 / 1 / 2) | ✅ | ❌ | ✅ | ✅ |
+| Client-ready HTML + PDF engagement report | ✅ | ❌ | ❌ | ❌ |
+| No SDK — pure `kubectl` queries | ✅ | ✅ | ❌ | ❌ |
+
+- **kube-bench** specializes in CIS benchmark checks at the node/control-plane level (SSH/manifest-based) and excels at that scope; it does not analyze RBAC bindings, runtime pod configurations, or secret exposure in workloads.
+- **Kubescape** is a broad compliance scanner with a large framework library, but requires deploying an in-cluster agent for full coverage; vamp-k8s-audit needs only `kubectl` read permissions.
+- **Trivy (k8s mode)** focuses on image vulnerability scanning and misconfiguration detection, but its findings are not structured for client-delivery reporting and it has no `--delta` comparison mode.
+- vamp-k8s-audit is the only tool in this comparison with an **extensible YAML rules engine** (add checks as data without modifying Python) and a built-in `--delta FILE` mode to track security posture changes between consecutive audits.
+
+---
+
+## Check Coverage
+
+| Check ID | Phase | Description | Severity | Standard |
+|----------|-------|-------------|----------|----------|
+| K8S-001 | 1 — Cluster Context | Anonymous API access enabled | CRITICAL | CIS K8S Benchmark 1.2.1 |
+| K8S-010 | 2 — RBAC | ServiceAccount bound to `cluster-admin` ClusterRole | CRITICAL | CIS K8S 5.1.1 |
+| K8S-017 | 2 — RBAC | ClusterRole with wildcard (`*`) on resources | HIGH | CIS K8S 5.1.3 |
+| K8S-031 | 3 — Pod Security | Privileged container (`privileged: true`) | CRITICAL | CIS K8S 5.2.1 |
+| K8S-038 | 3 — Pod Security | `allowPrivilegeEscalation` not set to false | HIGH | CIS K8S 5.2.5 |
+| K8S-045 | 3 — Pod Security | Missing CPU / memory resource limits | MEDIUM | CIS K8S 5.2.4 |
+| K8S-062 | 4 — Network | Namespace has no NetworkPolicy defined | HIGH | CIS K8S 5.3.2 |
+| K8S-068 | 4 — Network | Ingress without TLS / missing HTTPS redirect | MEDIUM | CIS K8S 5.4.1 |
+| K8S-081 | 5 — Secrets | Secret value exposed as plain environment variable | HIGH | CIS K8S 5.4.1 |
+| K8S-ETCD-001 | 10 — Control Plane | etcd peer TLS not enabled | CRITICAL | CIS K8S 2.1 |
+| K8S-KCM-003 | 10 — Control Plane | `kube-controller-manager` profiling enabled | MEDIUM | CIS K8S 1.3.2 |
+| K8S-KSCHED-001 | 10 — Control Plane | `kube-scheduler` profiling enabled | MEDIUM | CIS K8S 1.4.1 |
+
+---
+
 ## Legal Notice
 
 This tool is intended for **authorized security audits only**. Using it against

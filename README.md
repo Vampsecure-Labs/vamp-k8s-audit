@@ -226,6 +226,7 @@ python3 vamp_k8s_audit.py --control-plane --report-html control-plane-report.htm
 
 | Versión | Cambios principales |
 |---------|---------------------|
+| v3.1.0 | **+14 checks YAML** · `cis_admission_audit.yaml`: ValidatingWebhook/MutatingWebhook `failurePolicy:Ignore` (HIGH), webhook `sideEffects:Some/Unknown` (MEDIUM), Pod seccompProfile ausente (MEDIUM CIS 5.7.2), `runAsUser:0` en containers+initContainers (HIGH CIS 5.2.6), `capabilities.add` (HIGH CIS 5.2.9), PodSecurityPolicy `privileged:true` (HIGH CIS 5.2.1), PV/SC `reclaimPolicy:Delete` (MEDIUM), SC sin `allowVolumeExpansion` (LOW), namespace sin ResourceQuota/LimitRange (MEDIUM/LOW) · **58 checks totales** · 4 ficheros YAML |
 | v3.0.0 | Motor YAML extensible — 3 ficheros `rules/*.yaml`, 44 checks CIS; kube-bench wrapper (`--kube-bench`); 15 operadores `cmd_flag_*`; `--delta FILE` diff mode; paquete importable |
 | v2.2.0 | Fase 11 — checks de nodos y kubelet por flags de proceso; operadores `cmd_flag_ge/le/regex`; 27 tests |
 | v2.1.0 | Fase 10 delta scan (`--delta FILE`) y YAML engine beta (checks network/RBAC como datos) |

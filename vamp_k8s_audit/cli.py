@@ -80,8 +80,8 @@ def _construir_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--format", "-f", default="json",
-        choices=["json", "html", "markdown", "pdf"],
-        help="Formato del informe de salida (por defecto: json)",
+        choices=["json", "html", "pdf"],
+        help="Formato del informe guardado con --output (por defecto: json)",
     )
     p.add_argument(
         "--skip-images", action="store_true",
@@ -115,6 +115,12 @@ def _construir_parser() -> argparse.ArgumentParser:
         "--version", action="version",
         version=f"{TOOL_NAME} {VERSION}",
     )
+
+    # Argumentos estándar del informe de cliente VSL:
+    # --client / --engagement / --auditor / --report-scope / --report-html / --report-pdf
+    from vampsec_report import add_report_args
+    add_report_args(p)
+
     return p
 
 
@@ -165,23 +171,31 @@ def main() -> None:
     _imprimir_resumen(hallazgos)
 
     # ── Informe a fichero ─────────────────────────────────────────────────
-    if args.output:
+    report_html = getattr(args, "report_html", None)
+    report_pdf  = getattr(args, "report_pdf", None)
+    if args.output or report_html or report_pdf:
         try:
-            meta = meta_from_args(args)
-            report = VampSecReport(
-                meta     = meta,
-                findings = hallazgos,
-            )
-            report_path = Path(args.output)
-            if args.format == "json":
-                report.save_json(report_path)
-            elif args.format == "html":
-                report.save_html(report_path)
-            elif args.format == "markdown":
-                report.save_markdown(report_path)
-            elif args.format == "pdf":
-                report.save_pdf(report_path)
-            print(f"  {ANSI_GREEN}✓{ANSI_RESET} Informe guardado en: {args.output}")
+            meta   = meta_from_args(args, TOOL_NAME, VERSION)
+            report = VampSecReport(meta=meta, findings=hallazgos)
+
+            # Salida principal (--output + --format)
+            if args.output:
+                report_path = str(Path(args.output))
+                if args.format == "json":
+                    report.to_json(report_path)
+                elif args.format == "html":
+                    report.to_html_client(report_path)
+                elif args.format == "pdf":
+                    report.to_pdf(report_path)
+                print(f"  {ANSI_GREEN}✓{ANSI_RESET} Informe guardado en: {args.output}")
+
+            # Informe de cliente VSL (--report-html / --report-pdf)
+            if report_html:
+                report.to_html_client(report_html)
+                print(f"  {ANSI_GREEN}✓{ANSI_RESET} Informe cliente HTML: {report_html}")
+            if report_pdf:
+                report.to_pdf(report_pdf)
+                print(f"  {ANSI_GREEN}✓{ANSI_RESET} Informe cliente PDF: {report_pdf}")
         except Exception as exc:
             print(
                 f"{ANSI_RED}[INFORME ERROR]{ANSI_RESET} No se pudo generar el informe: {exc}",

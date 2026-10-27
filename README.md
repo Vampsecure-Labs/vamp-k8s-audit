@@ -4,7 +4,7 @@
 # vamp-k8s-audit
 
 ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)
-![Version](https://img.shields.io/badge/version-3.1.1-orange)
+![Version](https://img.shields.io/badge/version-3.2.0-orange)
 ![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green)
 ![VampSecure Labs](https://img.shields.io/badge/VampSecure-Labs-darkred)
 
@@ -103,13 +103,19 @@ python3 vamp_k8s_audit.py \
 | `--context CTX` | kubectl context to use | current context |
 | `--namespace NS` | Limit audit to one namespace | all namespaces |
 | `--kubeconfig PATH` | Path to kubeconfig file | `~/.kube/config` |
-| `--output FILE` | Save findings as JSON | — |
-| `--report-html FILE` | Generate professional HTML report | — |
+| `--output FILE` | Save the report to FILE (format set by `--format`) | — |
+| `--format {json,html,pdf}` | Output format for `--output` | json |
+| `--report-html FILE` | Write the client HTML engagement report | — |
+| `--report-pdf FILE` | Write the client PDF engagement report (needs `fpdf2`) | — |
 | `--client NAME` | Client name for the report | Confidential |
 | `--engagement DESC` | Engagement description | — |
 | `--auditor NAME` | Auditor name | VampSecure Labs |
+| `--report-scope TEXT` | Scope description for the report | — |
 | `--skip-images` | Skip image analysis (Phase 6) | false |
-| `--control-plane` | Activate Phase 10: CIS control plane checks (etcd, KCM, scheduler, kubelet) | false |
+| `--skip-cve` | Skip active CVE verification (Phase 9) | false |
+| `--audit-helm` | Include Helm chart values audit | false |
+| `--audit-control-plane` | Activate Phase 10: CIS control plane checks (etcd, KCM, scheduler, kubelet) | false |
+| `--delta FILE` | Diff against a previous report (NEW/RESOLVED) | — |
 | `--verbose` | Verbose mode | false |
 
 ---
@@ -124,7 +130,7 @@ python3 vamp_k8s_audit.py \
 | **4 — Network** | All namespaces | K8S-060..K8S-079 | LoadBalancer/NodePort exposure, missing NetworkPolicies, Ingress without TLS, Dashboard exposure, etcd TCP access |
 | **5 — Secrets** | All namespaces | K8S-080..K8S-099 | Secrets in plain env vars, secrets in ConfigMaps, Opaque secrets in default namespace |
 | **6 — Images & Runtime** | All pods | K8S-090..K8S-109 | `:latest` tags, public registries, missing readOnlyRootFilesystem, missing Pod Security Admission |
-| **10 — Control Plane CIS** (`--control-plane`) | Node manifest files | K8S-ETCD-*/K8S-KCM-*/K8S-KSCHED-* | CIS benchmark checks for etcd (8), kube-controller-manager (8), kube-scheduler (3), kubelet anonymous auth (1) |
+| **10 — Control Plane CIS** (`--audit-control-plane`) | Node manifest files | K8S-ETCD-*/K8S-KCM-*/K8S-KSCHED-* | CIS benchmark checks for etcd (8), kube-controller-manager (8), kube-scheduler (3), kubelet anonymous auth (1) |
 
 ### Finding Severity Distribution
 
@@ -202,7 +208,7 @@ rules:
 $ python3 vamp_k8s_audit.py --context lab-cluster --verbose
 
 ╔══════════════════════════════════════════════════════════╗
-║       vamp-k8s-audit v3.1.1 — VampSecure Labs            ║
+║       vamp-k8s-audit v3.2.0 — VampSecure Labs            ║
 ║  Context: lab-cluster   Namespace: all                   ║
 ╚══════════════════════════════════════════════════════════╝
 
@@ -280,13 +286,13 @@ This tool is intended for **authorized security audits only**. Using it against 
 
 ---
 
-### Phase 10 — Control Plane CIS (`--control-plane`)
+### Phase 10 — Control Plane CIS (`--audit-control-plane`)
 
 Inspects control plane component manifest files (`/etc/kubernetes/manifests/`) on the cluster nodes to verify CIS Kubernetes Benchmark compliance. Requires SSH access or a tool that can read node manifests.
 
 ```bash
-python3 vamp_k8s_audit.py --control-plane
-python3 vamp_k8s_audit.py --control-plane --report-html control-plane-report.html
+python3 vamp_k8s_audit.py --audit-control-plane
+python3 vamp_k8s_audit.py --audit-control-plane --report-html control-plane-report.html
 ```
 
 | Component | Check IDs | Count | Key Controls |
@@ -300,12 +306,13 @@ python3 vamp_k8s_audit.py --control-plane --report-html control-plane-report.htm
 
 | Version | Main changes |
 |---------|-------------|
+| v3.2.0 | Fixed the file-report path (`--output`/`--format`): it called `meta_from_args` with the wrong arity and non-existent `save_*` methods, so it never produced a file. Added the standard VSL client-report flags (`--client`/`--engagement`/`--auditor`/`--report-scope`/`--report-html`/`--report-pdf`); `--format` now `json`/`html`/`pdf` (dropped the unimplemented `markdown`). README CLI table reconciled with the real flags. |
 | v3.1.1 | Bilingual README (EN/ES) |
 | v3.1.0 | **+14 YAML checks** · `cis_admission_audit.yaml`: ValidatingWebhook/MutatingWebhook `failurePolicy:Ignore` (HIGH), webhook `sideEffects:Some/Unknown` (MEDIUM), Pod seccompProfile absent (MEDIUM CIS 5.7.2), `runAsUser:0` in containers+initContainers (HIGH CIS 5.2.6), `capabilities.add` (HIGH CIS 5.2.9), PodSecurityPolicy `privileged:true` (HIGH CIS 5.2.1), PV/SC `reclaimPolicy:Delete` (MEDIUM), SC without `allowVolumeExpansion` (LOW), namespace without ResourceQuota/LimitRange (MEDIUM/LOW) · **58 total checks** · 4 YAML files |
 | v3.0.0 | Extensible YAML engine — 3 `rules/*.yaml` files, 44 CIS checks; kube-bench wrapper (`--kube-bench`); 15 `cmd_flag_*` operators; `--delta FILE` diff mode; importable package |
 | v2.2.0 | Phase 11 — node and kubelet checks via process flags; `cmd_flag_ge/le/regex` operators; 27 tests |
 | v2.1.0 | Phase 10 delta scan (`--delta FILE`) and YAML engine beta (network/RBAC checks as data) |
-| v2.0.0 | Phase 10 control plane CIS — `--control-plane`, 20 new etcd/KCM/scheduler/kubelet checks |
+| v2.0.0 | Phase 10 control plane CIS — `--audit-control-plane`, 20 new etcd/KCM/scheduler/kubelet checks |
 | v1.3 | Phases 1-6, Phase 6 images, HTML report |
 | v1.0 | MVP RBAC + Pod Security + Network + Secrets |
 
@@ -395,13 +402,19 @@ python3 vamp_k8s_audit.py --verbose
 | `--context CTX` | Contexto kubectl a usar | contexto actual |
 | `--namespace NS` | Limitar auditoría a un namespace | todos los namespaces |
 | `--kubeconfig PATH` | Ruta al fichero kubeconfig | `~/.kube/config` |
-| `--output FILE` | Guardar hallazgos como JSON | — |
-| `--report-html FILE` | Generar informe HTML profesional | — |
+| `--output FILE` | Guardar el informe en FILE (formato según `--format`) | — |
+| `--format {json,html,pdf}` | Formato de salida para `--output` | json |
+| `--report-html FILE` | Escribir el informe de cliente en HTML | — |
+| `--report-pdf FILE` | Escribir el informe de cliente en PDF (requiere `fpdf2`) | — |
 | `--client NAME` | Nombre del cliente para el informe | Confidencial |
 | `--engagement DESC` | Descripción del engagement | — |
 | `--auditor NAME` | Nombre del auditor | VampSecure Labs |
+| `--report-scope TEXT` | Descripción del alcance para el informe | — |
 | `--skip-images` | Omitir análisis de imágenes (Fase 6) | false |
-| `--control-plane` | Activar Fase 10: checks CIS del plano de control (etcd, KCM, scheduler, kubelet) | false |
+| `--skip-cve` | Omitir verificación activa de CVEs (Fase 9) | false |
+| `--audit-helm` | Incluir auditoría de valores de Helm charts | false |
+| `--audit-control-plane` | Activar Fase 10: checks CIS del plano de control (etcd, KCM, scheduler, kubelet) | false |
+| `--delta FILE` | Comparar con un informe previo (NUEVOS/RESUELTOS) | — |
 | `--verbose` | Modo verbose | false |
 
 ---
@@ -416,7 +429,7 @@ python3 vamp_k8s_audit.py --verbose
 | **4 — Red** | Todos los namespaces | K8S-060..K8S-079 | Exposición LoadBalancer/NodePort, NetworkPolicies ausentes, Ingress sin TLS, exposición del Dashboard, acceso TCP a etcd |
 | **5 — Secretos** | Todos los namespaces | K8S-080..K8S-099 | Secretos en vars de entorno en texto plano, secretos en ConfigMaps, secretos Opaque en el namespace por defecto |
 | **6 — Imágenes y Runtime** | Todos los pods | K8S-090..K8S-109 | Tags `:latest`, registros públicos, falta de readOnlyRootFilesystem, falta de Pod Security Admission |
-| **10 — Plano de control CIS** (`--control-plane`) | Ficheros de manifiesto del nodo | K8S-ETCD-*/K8S-KCM-*/K8S-KSCHED-* | Checks del benchmark CIS Kubernetes para etcd (8), kube-controller-manager (8), kube-scheduler (3), kubelet auth anónima (1) |
+| **10 — Plano de control CIS** (`--audit-control-plane`) | Ficheros de manifiesto del nodo | K8S-ETCD-*/K8S-KCM-*/K8S-KSCHED-* | Checks del benchmark CIS Kubernetes para etcd (8), kube-controller-manager (8), kube-scheduler (3), kubelet auth anónima (1) |
 
 ### Distribución de severidad de hallazgos
 
@@ -529,13 +542,13 @@ Esta herramienta está destinada **exclusivamente a auditorías de seguridad aut
 
 ---
 
-### Fase 10 — Plano de control CIS (`--control-plane`)
+### Fase 10 — Plano de control CIS (`--audit-control-plane`)
 
 Inspecciona los ficheros de manifiesto de los componentes del plano de control (`/etc/kubernetes/manifests/`) en los nodos del clúster para verificar el cumplimiento del benchmark CIS Kubernetes. Requiere acceso SSH o una herramienta que pueda leer los manifiestos de los nodos.
 
 ```bash
-python3 vamp_k8s_audit.py --control-plane
-python3 vamp_k8s_audit.py --control-plane --report-html informe-plano-control.html
+python3 vamp_k8s_audit.py --audit-control-plane
+python3 vamp_k8s_audit.py --audit-control-plane --report-html informe-plano-control.html
 ```
 
 | Componente | IDs de check | Cantidad | Controles principales |
@@ -549,12 +562,13 @@ python3 vamp_k8s_audit.py --control-plane --report-html informe-plano-control.ht
 
 | Versión | Cambios principales |
 |---------|---------------------|
+| v3.2.0 | Arreglada la ruta de informe a fichero (`--output`/`--format`): llamaba a `meta_from_args` con aridad incorrecta y métodos `save_*` inexistentes, así que nunca generaba el fichero. Añadidos los flags estándar de informe de cliente VSL (`--client`/`--engagement`/`--auditor`/`--report-scope`/`--report-html`/`--report-pdf`); `--format` ahora `json`/`html`/`pdf` (eliminado el `markdown` sin implementar). Tabla de flags del README reconciliada con los flags reales. |
 | v3.1.1 | README bilingüe (EN/ES) |
 | v3.1.0 | **+14 checks YAML** · `cis_admission_audit.yaml`: ValidatingWebhook/MutatingWebhook `failurePolicy:Ignore` (HIGH), webhook `sideEffects:Some/Unknown` (MEDIUM), Pod seccompProfile ausente (MEDIUM CIS 5.7.2), `runAsUser:0` en containers+initContainers (HIGH CIS 5.2.6), `capabilities.add` (HIGH CIS 5.2.9), PodSecurityPolicy `privileged:true` (HIGH CIS 5.2.1), PV/SC `reclaimPolicy:Delete` (MEDIUM), SC sin `allowVolumeExpansion` (LOW), namespace sin ResourceQuota/LimitRange (MEDIUM/LOW) · **58 checks totales** · 4 ficheros YAML |
 | v3.0.0 | Motor YAML extensible — 3 ficheros `rules/*.yaml`, 44 checks CIS; wrapper kube-bench (`--kube-bench`); 15 operadores `cmd_flag_*`; modo diff `--delta FILE`; paquete importable |
 | v2.2.0 | Fase 11 — checks de nodos y kubelet por flags de proceso; operadores `cmd_flag_ge/le/regex`; 27 tests |
 | v2.1.0 | Fase 10 delta scan (`--delta FILE`) y YAML engine beta (checks network/RBAC como datos) |
-| v2.0.0 | Fase 10 control plane CIS — `--control-plane`, 20 nuevos checks etcd/KCM/scheduler/kubelet |
+| v2.0.0 | Fase 10 control plane CIS — `--audit-control-plane`, 20 nuevos checks etcd/KCM/scheduler/kubelet |
 | v1.3 | Fases 1-6, Phase 6 imágenes, HTML report |
 | v1.0 | MVP RBAC + Pod Security + Network + Secrets |
 

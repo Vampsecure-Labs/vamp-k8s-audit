@@ -11,7 +11,7 @@ from typing import Dict
 # Metadatos
 # ---------------------------------------------------------------------------
 
-VERSION   = "3.1.0"
+VERSION   = "3.2.0"
 TOOL_NAME = "vamp-k8s-audit"
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ __   ___   __  __ ___  ___ ___ ___ _   _ ___ ___ _      _   ___ ___
  \ V / _ \| |\/| |  _/\__ \ _| (__| |_| |   / _|| |__ / _ \| _ \__ \
   \_/_/ \_\_|  |_|_|  |___/___\___|\___/|_|_\___|____/_/ \_\___/___/
   by Antonio Hernandez "Belky" — VampSecure Studios
-  vamp-k8s-audit v2.2.0 · Kubernetes Security Auditor
+  vamp-k8s-audit v3.2.0 · Kubernetes Security Auditor
   ────────────────────────────────────────────────────────────────────────
   USO EXCLUSIVO EN AUDITORÍAS AUTORIZADAS · El uso no autorizado es ilegal
 """

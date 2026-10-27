@@ -377,6 +377,73 @@ class TestDeltaScan:
         finally:
             sys.argv = old_argv
 
-    def test_version_es_220(self):
+    def test_version_es_320(self):
         from vamp_k8s_audit import VERSION
-        assert VERSION == "2.2.0"
+        assert VERSION == "3.2.0"
+
+
+# ---------------------------------------------------------------------------
+# Informe de cliente (--client / --report-html / --report-pdf / --output)
+# ---------------------------------------------------------------------------
+
+class TestInformeCliente:
+    """El informe a fichero estaba roto (meta_from_args con aridad incorrecta
+    y métodos save_* inexistentes). Estos tests cubren la ruta ya corregida."""
+
+    def test_parser_expone_flags_informe(self):
+        import sys
+        from vamp_k8s_audit import _construir_parser
+        old_argv = sys.argv
+        sys.argv = [
+            "vamp-k8s-audit",
+            "--client", "Acme S.A.",
+            "--engagement", "K8S-Audit-2026",
+            "--auditor", "Analista",
+            "--report-html", "informe.html",
+            "--report-pdf", "informe.pdf",
+        ]
+        try:
+            args = _construir_parser().parse_args()
+            assert args.client == "Acme S.A."
+            assert args.engagement == "K8S-Audit-2026"
+            assert args.auditor == "Analista"
+            assert args.report_html == "informe.html"
+            assert args.report_pdf == "informe.pdf"
+        finally:
+            sys.argv = old_argv
+
+    def _finding(self, fid="K8S-001", sev="CRITICAL"):
+        from vamp_k8s_audit._report import Finding
+        return Finding(
+            id=fid, title="Test", severity=sev,
+            description="desc", evidence="ev", affected="pod/x",
+            remediation="fix",
+        )
+
+    def test_informe_json_se_escribe(self, tmp_path):
+        import argparse, json
+        from vamp_k8s_audit._report import VampSecReport, meta_from_args
+        from vamp_k8s_audit import VERSION, TOOL_NAME
+        ns = argparse.Namespace(
+            client="Acme", engagement="E", auditor="A", report_scope="scope",
+        )
+        meta = meta_from_args(ns, TOOL_NAME, VERSION)
+        report = VampSecReport(meta=meta, findings=[self._finding()])
+        out = tmp_path / "informe.json"
+        report.to_json(str(out))
+        data = json.loads(out.read_text())
+        assert data["meta"]["client"] == "Acme"
+        assert data["meta"]["tool_version"] == VERSION
+        assert data["summary"]["total"] == 1
+
+    def test_informe_html_se_escribe(self, tmp_path):
+        import argparse
+        from vamp_k8s_audit._report import VampSecReport, meta_from_args
+        from vamp_k8s_audit import VERSION, TOOL_NAME
+        ns = argparse.Namespace()
+        meta = meta_from_args(ns, TOOL_NAME, VERSION)
+        report = VampSecReport(meta=meta, findings=[self._finding()])
+        out = tmp_path / "informe.html"
+        report.to_html_client(str(out))
+        html = out.read_text()
+        assert "<html" in html.lower()

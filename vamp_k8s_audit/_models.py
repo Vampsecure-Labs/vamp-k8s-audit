@@ -11,8 +11,15 @@ from typing import Dict
 # Metadatos
 # ---------------------------------------------------------------------------
 
-VERSION   = "3.2.0"
+VERSION   = "3.3.0"
 TOOL_NAME = "vamp-k8s-audit"
+
+LANG: str = "en"
+
+
+def _s(en: str, es: str) -> str:
+    """Return string in active language (resolved at call time)."""
+    return es if LANG == "es" else en
 
 # ---------------------------------------------------------------------------
 # Colores ANSI (sin dependencias externas)

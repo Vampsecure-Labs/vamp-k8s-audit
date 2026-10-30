@@ -10,12 +10,13 @@ from collections import Counter
 from pathlib import Path
 
 import vamp_k8s_audit._core as _core
+import vamp_k8s_audit._models as _m
 
 from ._models import (
     VERSION, TOOL_NAME,
     ANSI_RESET, ANSI_BOLD, ANSI_RED, ANSI_YELLOW,
     ANSI_CYAN, ANSI_GREEN, ANSI_GREY, ANSI_DIM, ANSI_WHITE,
-    _SEV_COLOR, _color,
+    _SEV_COLOR, _color, _s,
 )
 from ._core import (
     K8SAuditor, apply_delta_scan,
@@ -31,18 +32,18 @@ from ._report import VampSecReport, meta_from_args
 def _imprimir_resumen(hallazgos: list) -> None:
     conteo = Counter(f.severity for f in hallazgos)
     print(f"\n{'─' * 70}")
-    print(f"{ANSI_BOLD}{ANSI_WHITE}  RESUMEN DE HALLAZGOS{ANSI_RESET}")
+    print(f"{ANSI_BOLD}{ANSI_WHITE}  {_s('FINDINGS SUMMARY', 'RESUMEN DE HALLAZGOS')}{ANSI_RESET}")
     print(f"{'─' * 70}")
 
     for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"):
         n = conteo.get(sev, 0)
         if n > 0:
             color = _SEV_COLOR.get(sev, ANSI_GREY)
-            print(f"  {_color(f'{sev:8}', color + ANSI_BOLD)}  {n:>3} hallazgo(s)")
+            print(f"  {_color(f'{sev:8}', color + ANSI_BOLD)}  {n:>3} {_s('finding(s)', 'hallazgo(s)')}")
 
     total = len(hallazgos)
     print(f"{'─' * 70}")
-    print(f"  {ANSI_BOLD}TOTAL{ANSI_RESET}         {total:>3} hallazgo(s)\n")
+    print(f"  {ANSI_BOLD}TOTAL{ANSI_RESET}         {total:>3} {_s('finding(s)', 'hallazgo(s)')}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +122,11 @@ def _construir_parser() -> argparse.ArgumentParser:
     from vampsec_report import add_report_args
     add_report_args(p)
 
+    p.add_argument(
+        "--lang", choices=["en", "es"], default="en",
+        help="Output language / Idioma de salida (default: en)",
+    )
+
     return p
 
 
@@ -131,6 +137,7 @@ def _construir_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _construir_parser()
     args   = parser.parse_args()
+    _m.LANG = args.lang
 
     # Propagamos el flag verbose al módulo _core (variable de módulo)
     _core._VERBOSE = args.verbose
@@ -161,9 +168,9 @@ def main() -> None:
                 hallazgos, args.delta
             )
             print(f"\n{ANSI_BOLD}{ANSI_CYAN}DELTA SCAN (vs {args.delta}){ANSI_RESET}")
-            print(f"  {ANSI_GREEN}Nuevos:    {len(new_ids)}{ANSI_RESET}   {sorted(new_ids)[:8]}")
-            print(f"  {ANSI_YELLOW}Recurrentes: {len(recurring_ids)}{ANSI_RESET}")
-            print(f"  {ANSI_DIM}Resueltos: {len(resolved_ids)}{ANSI_RESET}   {sorted(resolved_ids)[:8]}")
+            print(f"  {ANSI_GREEN}{_s('New', 'Nuevos')}:    {len(new_ids)}{ANSI_RESET}   {sorted(new_ids)[:8]}")
+            print(f"  {ANSI_YELLOW}{_s('Recurring', 'Recurrentes')}: {len(recurring_ids)}{ANSI_RESET}")
+            print(f"  {ANSI_DIM}{_s('Resolved', 'Resueltos')}: {len(resolved_ids)}{ANSI_RESET}   {sorted(resolved_ids)[:8]}")
         except ValueError as exc:
             print(f"{ANSI_RED}[DELTA ERROR]{ANSI_RESET} {exc}", file=sys.stderr)
 
@@ -187,15 +194,15 @@ def main() -> None:
                     report.to_html_client(report_path)
                 elif args.format == "pdf":
                     report.to_pdf(report_path)
-                print(f"  {ANSI_GREEN}✓{ANSI_RESET} Informe guardado en: {args.output}")
+                print(f"  {ANSI_GREEN}✓{ANSI_RESET} {_s('Report saved to', 'Informe guardado en')}: {args.output}")
 
             # Informe de cliente VSL (--report-html / --report-pdf)
             if report_html:
                 report.to_html_client(report_html)
-                print(f"  {ANSI_GREEN}✓{ANSI_RESET} Informe cliente HTML: {report_html}")
+                print(f"  {ANSI_GREEN}✓{ANSI_RESET} {_s('Client HTML report', 'Informe cliente HTML')}: {report_html}")
             if report_pdf:
                 report.to_pdf(report_pdf)
-                print(f"  {ANSI_GREEN}✓{ANSI_RESET} Informe cliente PDF: {report_pdf}")
+                print(f"  {ANSI_GREEN}✓{ANSI_RESET} {_s('Client PDF report', 'Informe cliente PDF')}: {report_pdf}")
         except Exception as exc:
             print(
                 f"{ANSI_RED}[INFORME ERROR]{ANSI_RESET} No se pudo generar el informe: {exc}",

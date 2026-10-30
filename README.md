@@ -107,6 +107,7 @@ python3 vamp_k8s_audit.py \
 | `--format {json,html,pdf}` | Output format for `--output` | json |
 | `--report-html FILE` | Write the client HTML engagement report | — |
 | `--report-pdf FILE` | Write the client PDF engagement report (needs `fpdf2`) | — |
+| `--lang {en,es}` | Output language: `en` English, `es` Spanish | en |
 | `--client NAME` | Client name for the report | Confidential |
 | `--engagement DESC` | Engagement description | — |
 | `--auditor NAME` | Auditor name | VampSecure Labs |
@@ -208,7 +209,7 @@ rules:
 $ python3 vamp_k8s_audit.py --context lab-cluster --verbose
 
 ╔══════════════════════════════════════════════════════════╗
-║       vamp-k8s-audit v3.2.0 — VampSecure Labs            ║
+║       vamp-k8s-audit v3.3.0 — VampSecure Labs            ║
 ║  Context: lab-cluster   Namespace: all                   ║
 ╚══════════════════════════════════════════════════════════╝
 
@@ -306,6 +307,7 @@ python3 vamp_k8s_audit.py --audit-control-plane --report-html control-plane-repo
 
 | Version | Main changes |
 |---------|-------------|
+| v3.3.0 | Bilingual EN/ES output via `--lang en|es` |
 | v3.2.0 | Fixed the file-report path (`--output`/`--format`): it called `meta_from_args` with the wrong arity and non-existent `save_*` methods, so it never produced a file. Added the standard VSL client-report flags (`--client`/`--engagement`/`--auditor`/`--report-scope`/`--report-html`/`--report-pdf`); `--format` now `json`/`html`/`pdf` (dropped the unimplemented `markdown`). README CLI table reconciled with the real flags. |
 | v3.1.1 | Bilingual README (EN/ES) |
 | v3.1.0 | **+14 YAML checks** · `cis_admission_audit.yaml`: ValidatingWebhook/MutatingWebhook `failurePolicy:Ignore` (HIGH), webhook `sideEffects:Some/Unknown` (MEDIUM), Pod seccompProfile absent (MEDIUM CIS 5.7.2), `runAsUser:0` in containers+initContainers (HIGH CIS 5.2.6), `capabilities.add` (HIGH CIS 5.2.9), PodSecurityPolicy `privileged:true` (HIGH CIS 5.2.1), PV/SC `reclaimPolicy:Delete` (MEDIUM), SC without `allowVolumeExpansion` (LOW), namespace without ResourceQuota/LimitRange (MEDIUM/LOW) · **58 total checks** · 4 YAML files |
@@ -406,6 +408,7 @@ python3 vamp_k8s_audit.py --verbose
 | `--format {json,html,pdf}` | Formato de salida para `--output` | json |
 | `--report-html FILE` | Escribir el informe de cliente en HTML | — |
 | `--report-pdf FILE` | Escribir el informe de cliente en PDF (requiere `fpdf2`) | — |
+| `--lang {en,es}` | Idioma de salida: `en` inglés, `es` español | en |
 | `--client NAME` | Nombre del cliente para el informe | Confidencial |
 | `--engagement DESC` | Descripción del engagement | — |
 | `--auditor NAME` | Nombre del auditor | VampSecure Labs |
@@ -562,6 +565,7 @@ python3 vamp_k8s_audit.py --audit-control-plane --report-html informe-plano-cont
 
 | Versión | Cambios principales |
 |---------|---------------------|
+| v3.3.0 | Salida bilingüe EN/ES mediante `--lang en|es` |
 | v3.2.0 | Arreglada la ruta de informe a fichero (`--output`/`--format`): llamaba a `meta_from_args` con aridad incorrecta y métodos `save_*` inexistentes, así que nunca generaba el fichero. Añadidos los flags estándar de informe de cliente VSL (`--client`/`--engagement`/`--auditor`/`--report-scope`/`--report-html`/`--report-pdf`); `--format` ahora `json`/`html`/`pdf` (eliminado el `markdown` sin implementar). Tabla de flags del README reconciliada con los flags reales. |
 | v3.1.1 | README bilingüe (EN/ES) |
 | v3.1.0 | **+14 checks YAML** · `cis_admission_audit.yaml`: ValidatingWebhook/MutatingWebhook `failurePolicy:Ignore` (HIGH), webhook `sideEffects:Some/Unknown` (MEDIUM), Pod seccompProfile ausente (MEDIUM CIS 5.7.2), `runAsUser:0` en containers+initContainers (HIGH CIS 5.2.6), `capabilities.add` (HIGH CIS 5.2.9), PodSecurityPolicy `privileged:true` (HIGH CIS 5.2.1), PV/SC `reclaimPolicy:Delete` (MEDIUM), SC sin `allowVolumeExpansion` (LOW), namespace sin ResourceQuota/LimitRange (MEDIUM/LOW) · **58 checks totales** · 4 ficheros YAML |

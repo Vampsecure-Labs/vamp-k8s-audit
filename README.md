@@ -4,7 +4,7 @@
 # vamp-k8s-audit
 
 ![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue)
-![Version](https://img.shields.io/badge/version-3.2.0-orange)
+![Version](https://img.shields.io/badge/version-3.4.0-orange)
 ![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green)
 ![VampSecure Labs](https://img.shields.io/badge/VampSecure-Labs-darkred)
 
@@ -209,7 +209,7 @@ rules:
 $ python3 vamp_k8s_audit.py --context lab-cluster --verbose
 
 ╔══════════════════════════════════════════════════════════╗
-║       vamp-k8s-audit v3.3.0 — VampSecure Labs            ║
+║       vamp-k8s-audit v3.4.0 — VampSecure Labs            ║
 ║  Context: lab-cluster   Namespace: all                   ║
 ╚══════════════════════════════════════════════════════════╝
 
@@ -307,6 +307,7 @@ python3 vamp_k8s_audit.py --audit-control-plane --report-html control-plane-repo
 
 | Version | Main changes |
 |---------|-------------|
+| v3.4.0 | Bilingual `--help` menu: `_detect_lang()` pre-parser detects `--lang` / `LANG` env var |
 | v3.3.0 | Bilingual EN/ES output via `--lang en|es` |
 | v3.2.0 | Fixed the file-report path (`--output`/`--format`): it called `meta_from_args` with the wrong arity and non-existent `save_*` methods, so it never produced a file. Added the standard VSL client-report flags (`--client`/`--engagement`/`--auditor`/`--report-scope`/`--report-html`/`--report-pdf`); `--format` now `json`/`html`/`pdf` (dropped the unimplemented `markdown`). README CLI table reconciled with the real flags. |
 | v3.1.1 | Bilingual README (EN/ES) |
@@ -565,6 +566,7 @@ python3 vamp_k8s_audit.py --audit-control-plane --report-html informe-plano-cont
 
 | Versión | Cambios principales |
 |---------|---------------------|
+| v3.4.0 | Menú `--help` bilingüe: `_detect_lang()` detecta `--lang` / variable `LANG` antes del parser |
 | v3.3.0 | Salida bilingüe EN/ES mediante `--lang en|es` |
 | v3.2.0 | Arreglada la ruta de informe a fichero (`--output`/`--format`): llamaba a `meta_from_args` con aridad incorrecta y métodos `save_*` inexistentes, así que nunca generaba el fichero. Añadidos los flags estándar de informe de cliente VSL (`--client`/`--engagement`/`--auditor`/`--report-scope`/`--report-html`/`--report-pdf`); `--format` ahora `json`/`html`/`pdf` (eliminado el `markdown` sin implementar). Tabla de flags del README reconciliada con los flags reales. |
 | v3.1.1 | README bilingüe (EN/ES) |

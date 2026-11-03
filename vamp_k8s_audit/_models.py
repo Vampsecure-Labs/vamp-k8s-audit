@@ -11,7 +11,7 @@ from typing import Dict
 # Metadatos
 # ---------------------------------------------------------------------------
 
-VERSION   = "3.3.0"
+VERSION   = "3.4.0"
 TOOL_NAME = "vamp-k8s-audit"
 
 LANG: str = "en"

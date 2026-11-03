@@ -50,21 +50,49 @@ def _imprimir_resumen(hallazgos: list) -> None:
 # Parser de argumentos
 # ---------------------------------------------------------------------------
 
+def _detect_lang() -> str:
+    import os as _os
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg == "--lang" and i + 1 < len(argv):
+            v = argv[i + 1]
+            return v if v in ("en", "es") else "en"
+        if arg.startswith("--lang="):
+            v = arg.split("=", 1)[1]
+            return v if v in ("en", "es") else "en"
+    for var in ("LANG", "LANGUAGE"):
+        val = _os.environ.get(var, "")
+        if val.lower().startswith("es"):
+            return "es"
+    return "en"
+
+
 def _construir_parser() -> argparse.ArgumentParser:
+    import vamp_k8s_audit._models as _models_mod
+    _models_mod.LANG = _detect_lang()
+
+    from vamp_k8s_audit._models import _T as _Tk
     p = argparse.ArgumentParser(
         prog        = "vamp-k8s-audit",
-        description = (
-            "Auditor de seguridad para clústeres Kubernetes — VampSecure Labs"
-        ),
+        description = str(_Tk(
+            f"Kubernetes security auditor v{VERSION} — VampSecure Labs — CIS K8s Benchmark v1.9",
+            f"Auditor de seguridad para clústeres Kubernetes v{VERSION} — VampSecure Labs",
+        )),
         formatter_class = argparse.RawDescriptionHelpFormatter,
-        epilog = (
+        epilog = str(_Tk(
+            "Examples:\n"
+            "  vamp-k8s-audit\n"
+            "  vamp-k8s-audit --context mycluster --namespace production\n"
+            "  vamp-k8s-audit --output report.json --format json\n"
+            "  vamp-k8s-audit --audit-helm --audit-control-plane\n"
+            "  vamp-k8s-audit --delta baseline.json --output delta.json",
             "Ejemplos:\n"
             "  vamp-k8s-audit\n"
             "  vamp-k8s-audit --context micluster --namespace produccion\n"
             "  vamp-k8s-audit --output informe.json --format json\n"
             "  vamp-k8s-audit --audit-helm --audit-control-plane\n"
-            "  vamp-k8s-audit --delta baseline.json --output delta.json\n"
-        ),
+            "  vamp-k8s-audit --delta baseline.json --output delta.json",
+        )),
     )
 
     p.add_argument(
